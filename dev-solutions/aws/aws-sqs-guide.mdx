@@ -1,0 +1,279 @@
+---
+title: "SQS Guide"
+description: "SQS Guide"
+---
+
+# AWS SQS Developer Guide
+
+This guide explains **Amazon SQS concepts** in a **practical, developer-focused way**, including **Standard queues, FIFO queues, DLQ, retries, and polling strategies**, using real application examples.
+
+---
+
+## Table of Contents
+
+1. [What is AWS SQS](#what-is-aws-sqs)
+2. [Where SQS Fits in an Application](#where-sqs-fits-in-an-application)
+3. [Standard SQS Queue](#standard-sqs-queue)
+4. [FIFO SQS Queue](#fifo-sqs-queue)
+5. [Message Visibility Timeout & Retries](#message-visibility-timeout--retries)
+6. [Dead Letter Queue (DLQ)](#dead-letter-queue-dlq)
+7. [Long Polling vs Short Polling](#long-polling-vs-short-polling)
+8. [Real Application Example: Order & Email](#real-application-example-order--email)
+9. [Best Practices](#best-practices)
+10. [Common Exam & Interview Notes](#common-exam--interview-notes)
+
+---
+
+## What is AWS SQS
+
+**Amazon SQS (Simple Queue Service)** is a **fully managed message queue** that enables **asynchronous communication** between application components.
+
+**Core idea**:
+
+> SQS decouples your API from background or failure-prone tasks.
+
+---
+
+## Where SQS Fits in an Application
+
+### Typical Architecture
+
+```
+Frontend (Amplify / Web)
+        ↓
+Backend API (EC2 / Spring Boot)
+        ↓
+       RDS
+        ↓
+       SQS  ← async tasks
+        ↓
+Worker (EC2 / Lambda)
+```
+
+**Use SQS when**:
+
+- Tasks are slow or heavy
+- Tasks may fail
+- Tasks should not block user requests
+
+---
+
+## Standard SQS Queue
+
+### Characteristics
+
+- Unlimited throughput
+- At-least-once delivery
+- Order is **not guaranteed**
+
+### Use Cases
+
+- Sending emails
+- Background jobs
+- Image processing
+- Analytics events
+
+### Notes
+
+- Messages may be delivered more than once
+- Consumers must be **idempotent**
+
+---
+
+## FIFO SQS Queue
+
+**FIFO = First In, First Out**
+
+### Guarantees
+
+- Exactly-once processing
+- Strict ordering (per MessageGroupId)
+
+### Required Rules
+
+- Queue name must end with:
+
+```
+.fifo
+```
+
+- Every message must include:
+
+```
+MessageGroupId
+```
+
+### Ordering Behavior
+
+Ordering is guaranteed **within a MessageGroupId**, not globally.
+
+### Use Cases
+
+- Payments
+- Order state transitions
+- Inventory updates
+
+### Not Recommended For
+
+- Emails
+- Logs
+- High-throughput background jobs
+
+---
+
+## Message Visibility Timeout & Retries
+
+### Visibility Timeout
+
+When a consumer receives a message:
+
+- Message becomes invisible
+- Default: **30 seconds**
+
+### Retry Flow
+
+```
+Receive → Fail → Visibility Timeout → Retry
+```
+
+If the message is not deleted, it becomes visible again and can be retried.
+
+---
+
+## Dead Letter Queue (DLQ)
+
+A **Dead Letter Queue (DLQ)** is a separate SQS queue that stores messages that **fail processing multiple times**.
+
+### How DLQ Works
+
+- Configure `MaxReceiveCount` (e.g. 5)
+- After exceeding retries:
+  - Message is moved to DLQ
+  - Message is removed from the main queue
+
+### Important Facts
+
+- DLQ does **not retry** messages
+- DLQ does **not process** messages
+- DLQ requires **manual intervention**
+
+### Purpose
+
+- Prevent infinite retry loops
+- Isolate poison messages
+- Enable debugging and recovery
+
+---
+
+## Long Polling vs Short Polling
+
+### Short Polling (Default)
+
+**Behavior**:
+
+- Returns immediately
+- Often returns empty responses
+
+**Problems**:
+
+- Higher cost
+- Wasted CPU
+
+```
+Worker → SQS → Empty
+Worker → SQS → Empty
+```
+
+---
+
+### Long Polling (Recommended)
+
+**Behavior**:
+
+- Waits up to 20 seconds
+- Responds immediately when a message arrives
+
+**Benefits**:
+
+- Lower cost
+- Fewer empty responses
+- Better performance
+
+```
+Worker → SQS (wait)
+SQS → Worker (message)
+```
+
+### Configuration
+
+- `WaitTimeSeconds`: 1–20 seconds
+- Can be set per queue or per request
+
+---
+
+## Real Application Example: Order & Email
+
+### Flow
+
+```
+User places order
+        ↓
+API saves order to RDS
+        ↓
+API sends SEND_EMAIL message to SQS
+        ↓
+User gets response immediately
+```
+
+### Email Worker
+
+```
+SQS → Worker → Send Email
+```
+
+### Failure Scenario
+
+- Email fails multiple times
+- Message is moved to DLQ
+- Order is successful
+- Email is not sent automatically
+
+### Recovery Steps
+
+- CloudWatch alarm triggers
+- Developer inspects DLQ message
+- Fixes the issue
+- Re-drives message to the main queue
+
+---
+
+## Best Practices
+
+1. Use **Standard queues** by default
+2. Use **FIFO only when order matters**
+3. Always configure a **DLQ**
+4. Enable **long polling**
+5. Keep messages small (&lt;256 KB)
+6. Store large payloads in **S3**
+7. Make consumers **idempotent**
+8. Monitor DLQ with **CloudWatch alarms**
+
+---
+
+## Common Exam & Interview Notes
+
+- FIFO ordering is per `MessageGroupId`
+- DLQ does not retry messages
+- Long polling reduces cost and latency
+- SQS is pull-based
+- SQS enables decoupled, async processing
+
+---
+
+## Summary
+
+- SQS handles asynchronous work
+- Standard queues are fast and scalable
+- FIFO queues are ordered and safe
+- DLQ isolates failures
+- Long polling improves efficiency

@@ -1,0 +1,627 @@
+---
+title: "Amazon Managed Service for Apache Flink"
+description: "Amazon Managed Service for Apache Flink"
+---
+
+# AWS Managed Service for Apache Flink Developer Guide
+
+This guide explains **Amazon Managed Service for Apache Flink concepts** in a **practical, developer-focused way**, including **stream processing, SQL queries, windowing, state management, and integration patterns**, using real application examples.
+
+---
+
+## Table of Contents
+
+1. [What is AWS Managed Service for Apache Flink](#what-is-aws-managed-service-for-apache-flink)
+2. [Where Flink Fits in an Application](#where-flink-fits-in-an-application)
+3. [Flink vs Kinesis Data Analytics vs Lambda](#flink-vs-kinesis-data-analytics-vs-lambda)
+4. [Core Concepts: Applications and State](#core-concepts-applications-and-state)
+5. [Data Sources and Destinations](#data-sources-and-destinations)
+6. [Flink SQL for Stream Processing](#flink-sql-for-stream-processing)
+7. [Windowing and Aggregations](#windowing-and-aggregations)
+8. [Stateful Processing](#stateful-processing)
+9. [Scaling and Parallelism](#scaling-and-parallelism)
+10. [Checkpoints and Fault Tolerance](#checkpoints-and-fault-tolerance)
+11. [Real Application Example: Fraud Detection](#real-application-example-fraud-detection)
+12. [Best Practices](#best-practices)
+13. [Common Exam & Interview Notes](#common-exam--interview-notes)
+
+---
+
+## What is AWS Managed Service for Apache Flink
+
+**Amazon Managed Service for Apache Flink** (formerly Kinesis Data Analytics) is a **fully managed service** for **processing and analyzing streaming data in real-time** using **Apache Flink**.
+
+**Core idea**:
+
+> Flink transforms streaming data using SQL or Java/Scala code without managing infrastructure.
+
+### Key Features
+
+- Real-time stream processing
+- SQL and programming APIs (Java, Scala, Python)
+- Stateful computations
+- Exactly-once processing
+- Automatic scaling
+- Built-in fault tolerance
+
+---
+
+## Where Flink Fits in an Application
+
+### Typical Architecture
+
+```
+Data Sources
+    ↓
+Kinesis / Kafka / MSK
+    ↓
+Managed Flink Application
+    ↓
+Kinesis / S3 / Redshift / OpenSearch
+    ↓
+Dashboards / Alerts
+```
+
+**Use Flink when**:
+
+- Complex stream transformations needed
+- Real-time aggregations required
+- Stateful processing is essential
+- SQL queries on streaming data
+- Low-latency analytics (sub-second)
+
+---
+
+## Flink vs Kinesis Data Analytics vs Lambda
+
+| Feature              | Flink                       | Kinesis Data Analytics | Lambda                 |
+| -------------------- | --------------------------- | ---------------------- | ---------------------- |
+| **Processing Model** | Stream processing framework | SQL on streams         | Event-driven functions |
+| **Language**         | Java, Scala, Python, SQL    | SQL only               | Multiple languages     |
+| **State Management** | Advanced stateful           | Limited                | Stateless (default)    |
+| **Complexity**       | Complex transformations     | Simple queries         | Simple logic           |
+| **Windowing**        | Advanced                    | Basic                  | Manual                 |
+| **Exactly-Once**     | Yes                         | Yes                    | At-least-once          |
+| **Scaling**          | Automatic parallelism       | Automatic              | Concurrent executions  |
+| **Use Case**         | Complex analytics           | Simple SQL queries     | Event processing       |
+
+### When to Use What
+
+**Flink**:
+
+- Complex event processing
+- Stateful computations
+- Advanced windowing
+- Pattern detection
+- Machine learning on streams
+
+**Kinesis Data Analytics (SQL)**:
+
+- Simple SQL queries
+- Quick prototyping
+- Basic aggregations
+- Low code requirements
+
+**Lambda**:
+
+- Simple transformations
+- Event-driven logic
+- Serverless architecture
+- Integration with AWS services
+
+---
+
+## Core Concepts: Applications and State
+
+### Flink Application
+
+A **Flink application** is a program that processes streaming data.
+
+**Components**:
+
+- **Source**: Where data comes from (Kinesis, Kafka)
+- **Processing**: Transformations, aggregations, joins
+- **Sink**: Where data goes to (S3, Kinesis, Redshift)
+
+### State
+
+**State** is data that Flink maintains across events for stateful processing.
+
+**Types of State**:
+
+**Keyed State**:
+
+- Associated with a specific key
+- Example: User session data, account balance
+
+**Operator State**:
+
+- Associated with a processing operator
+- Example: Buffered records, counters
+
+### Why State Matters
+
+- Calculate running totals
+- Detect patterns across events
+- Maintain session information
+- Track user behavior
+
+---
+
+## Data Sources and Destinations
+
+### Supported Sources
+
+**Amazon Kinesis Data Streams**:
+
+- Real-time data ingestion
+- Most common source
+
+**Amazon MSK (Managed Kafka)**:
+
+- High-throughput streaming
+- Kafka compatibility
+
+**Custom Sources**:
+
+- REST APIs
+- Databases
+- File systems
+
+### Supported Destinations (Sinks)
+
+**Amazon Kinesis Data Streams**:
+
+- Send processed data downstream
+
+**Amazon S3**:
+
+- Store results in data lake
+- Parquet, JSON, CSV formats
+
+**Amazon Redshift**:
+
+- Load analytics results
+- Business intelligence
+
+**Amazon OpenSearch**:
+
+- Search and visualization
+- Real-time dashboards
+
+**Custom Sinks**:
+
+- DynamoDB (via Lambda)
+- RDS (via Lambda)
+- External APIs
+
+---
+
+## Flink SQL for Stream Processing
+
+### Basic Query Structure
+
+```sql
+CREATE TABLE source_table (
+    user_id VARCHAR,
+    event_type VARCHAR,
+    amount DECIMAL,
+    event_time TIMESTAMP(3),
+    WATERMARK FOR event_time AS event_time - INTERVAL '5' SECOND
+)
+WITH (
+    'connector' = 'kinesis',
+    'stream' = 'input-stream',
+    'aws.region' = 'us-east-1'
+);
+
+CREATE TABLE destination_table (
+    user_id VARCHAR,
+    total_amount DECIMAL,
+    event_count BIGINT
+)
+WITH (
+    'connector' = 'kinesis',
+    'stream' = 'output-stream',
+    'aws.region' = 'us-east-1'
+);
+
+INSERT INTO destination_table
+SELECT
+    user_id,
+    SUM(amount) as total_amount,
+    COUNT(*) as event_count
+FROM source_table
+WHERE event_type = 'purchase'
+GROUP BY user_id;
+```
+
+### Key SQL Features
+
+**Filtering**:
+
+```sql
+WHERE event_type = 'purchase' AND amount > 100
+```
+
+**Aggregations**:
+
+```sql
+SUM(amount), COUNT(*), AVG(price), MAX(quantity)
+```
+
+**Joins** (Stream-to-Stream):
+
+```sql
+SELECT a.user_id, a.order_id, b.product_name
+FROM orders a
+JOIN products b
+ON a.product_id = b.product_id
+WHERE a.event_time BETWEEN b.event_time - INTERVAL '1' HOUR
+                       AND b.event_time + INTERVAL '1' HOUR
+```
+
+---
+
+## Windowing and Aggregations
+
+### What is Windowing?
+
+**Windowing** groups streaming data into finite chunks for aggregation.
+
+### Window Types
+
+### 1. Tumbling Window
+
+**Fixed-size, non-overlapping windows**
+
+```sql
+SELECT
+    user_id,
+    TUMBLE_START(event_time, INTERVAL '5' MINUTE) as window_start,
+    SUM(amount) as total
+FROM transactions
+GROUP BY
+    user_id,
+    TUMBLE(event_time, INTERVAL '5' MINUTE)
+```
+
+**Visualization**:
+
+```
+[0-5min] [5-10min] [10-15min]
+```
+
+**Use cases**: Hourly metrics, daily summaries
+
+### 2. Hopping Window
+
+**Fixed-size, overlapping windows**
+
+```sql
+SELECT
+    user_id,
+    HOP_START(event_time, INTERVAL '1' MINUTE, INTERVAL '5' MINUTE) as window_start,
+    COUNT(*) as event_count
+FROM events
+GROUP BY
+    user_id,
+    HOP(event_time, INTERVAL '1' MINUTE, INTERVAL '5' MINUTE)
+```
+
+**Visualization**:
+
+```
+[0-5min]
+  [1-6min]
+    [2-7min]
+```
+
+**Use cases**: Moving averages, sliding metrics
+
+### 3. Session Window
+
+**Dynamic windows based on inactivity gaps**
+
+```sql
+SELECT
+    user_id,
+    SESSION_START(event_time, INTERVAL '15' MINUTE) as session_start,
+    COUNT(*) as clicks_in_session
+FROM clicks
+GROUP BY
+    user_id,
+    SESSION(event_time, INTERVAL '15' MINUTE)
+```
+
+**Visualization**:
+
+```
+Activity → Gap (15min) → New Session
+[Session 1]  idle  [Session 2]
+```
+
+**Use cases**: User sessions, engagement tracking
+
+---
+
+## Stateful Processing
+
+### Why Stateful Processing?
+
+- Maintain context across events
+- Detect patterns
+- Calculate running totals
+- Track user journeys
+
+### Example: Running Sum
+
+```sql
+-- Calculate running total per user
+SELECT
+    user_id,
+    event_time,
+    amount,
+    SUM(amount) OVER (
+        PARTITION BY user_id
+        ORDER BY event_time
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) as running_total
+FROM transactions
+```
+
+### Example: Pattern Detection
+
+Detect 3 failed login attempts within 5 minutes:
+
+```sql
+SELECT *
+FROM login_events
+MATCH_RECOGNIZE (
+    PARTITION BY user_id
+    ORDER BY event_time
+    MEASURES
+        FIRST(A.event_time) as first_attempt,
+        LAST(C.event_time) as last_attempt
+    PATTERN (A B C)
+    DEFINE
+        A AS A.status = 'failed',
+        B AS B.status = 'failed',
+        C AS C.status = 'failed'
+)
+WHERE last_attempt - first_attempt < INTERVAL '5' MINUTE
+```
+
+### State Backend
+
+Flink stores state in:
+
+- **RocksDB** (default): Disk-based, large state
+- **Heap**: Memory-based, fast but limited
+
+---
+
+## Scaling and Parallelism
+
+### Parallelism Units (KPUs)
+
+**Kinesis Processing Unit (KPU)**:
+
+- 1 KPU = 1 vCPU + 4 GB memory
+- Minimum: 1 KPU
+- Auto-scaling available
+
+### How Scaling Works
+
+```
+Input Stream (multiple shards)
+    ↓
+Flink Application (multiple parallel tasks)
+    ↓
+Output Stream (multiple shards)
+```
+
+### Parallelism Example
+
+```
+3 Kinesis shards → 6 KPUs (2 per shard)
+    ↓
+Process 3x more data
+```
+
+### Auto-Scaling
+
+- Monitors CPU and backpressure
+- Adds/removes KPUs automatically
+- Scales between min and max settings
+
+---
+
+## Checkpoints and Fault Tolerance
+
+### Checkpoints
+
+**Checkpoints** are periodic snapshots of application state.
+
+**Purpose**:
+
+- Enable fault recovery
+- Guarantee exactly-once processing
+- Allow application updates
+
+### How Checkpoints Work
+
+```
+1. Flink triggers checkpoint
+2. State is saved to S3
+3. Processing continues
+4. If failure occurs → restore from last checkpoint
+```
+
+### Configuration
+
+```sql
+SET 'execution.checkpointing.interval' = '60s';
+SET 'execution.checkpointing.mode' = 'EXACTLY_ONCE';
+```
+
+### Exactly-Once Processing
+
+Flink guarantees **exactly-once** semantics:
+
+- Each record processed exactly once
+- No duplicates
+- No data loss
+
+### Recovery Flow
+
+```
+Application Running → Checkpoint Saved
+    ↓
+Failure Occurs
+    ↓
+Restore from Last Checkpoint
+    ↓
+Resume Processing
+```
+
+---
+
+## Real Application Example: Fraud Detection
+
+### Scenario
+
+E-commerce platform detecting fraudulent transactions in real-time.
+
+### Architecture
+
+```
+Payment Events (Kinesis)
+    ↓
+Managed Flink Application
+    ↓
+├── Real-time Alerts (Kinesis → Lambda → SNS)
+└── Analytics Storage (S3)
+```
+
+### Fraud Detection Rules
+
+**Rule 1**: Multiple high-value transactions in short time
+
+```sql
+-- Detect 3+ transactions over $500 within 10 minutes
+SELECT
+    user_id,
+    TUMBLE_START(event_time, INTERVAL '10' MINUTE) as window_start,
+    COUNT(*) as transaction_count,
+    SUM(amount) as total_amount
+FROM transactions
+WHERE amount > 500
+GROUP BY
+    user_id,
+    TUMBLE(event_time, INTERVAL '10' MINUTE)
+HAVING COUNT(*) >= 3
+```
+
+**Rule 2**: Transactions from multiple countries
+
+```sql
+-- Detect purchases from 2+ countries within 1 hour
+SELECT
+    user_id,
+    HOP_START(event_time, INTERVAL '5' MINUTE, INTERVAL '1' HOUR) as window_start,
+    COUNT(DISTINCT country) as country_count,
+    COLLECT(country) as countries
+FROM transactions
+GROUP BY
+    user_id,
+    HOP(event_time, INTERVAL '5' MINUTE, INTERVAL '1' HOUR)
+HAVING COUNT(DISTINCT country) >= 2
+```
+
+**Rule 3**: Failed → Successful pattern
+
+```sql
+-- Detect failed attempt followed by successful transaction
+SELECT *
+FROM transactions
+MATCH_RECOGNIZE (
+    PARTITION BY user_id, card_number
+    ORDER BY event_time
+    MEASURES
+        A.event_time as failed_time,
+        B.event_time as success_time,
+        B.amount as amount
+    PATTERN (A+ B)
+    WITHIN INTERVAL '30' MINUTE
+    DEFINE
+        A AS A.status = 'declined',
+        B AS B.status = 'approved' AND B.amount > 1000
+)
+```
+
+### Output Flow
+
+**Suspicious Transaction Detected**:
+
+1. Flink identifies pattern
+2. Sends alert to output Kinesis stream
+3. Lambda consumes alert
+4. SNS notifies fraud team
+5. Transaction flagged in DynamoDB
+
+**Benefits**:
+
+- **Real-time**: Detect fraud in milliseconds
+- **Stateful**: Track patterns across events
+- **Scalable**: Handle millions of transactions
+- **Accurate**: Complex rules with low false positives
+
+---
+
+## Best Practices
+
+1. **Choose appropriate windowing**: Match business requirements
+2. **Configure checkpointing**: Balance frequency vs performance
+3. **Use event time over processing time**: More accurate results
+4. **Set watermarks correctly**: Handle late data
+5. **Optimize parallelism**: Match source partitions
+6. **Monitor metrics**: Backpressure, checkpoint duration
+7. **Use Flink SQL for simple cases**: Faster development
+8. **Use Java/Scala for complex logic**: More flexibility
+9. **Test with production-like data**: Avoid surprises
+10. **Enable auto-scaling**: Handle variable workloads
+11. **Set appropriate state backend**: RocksDB for large state
+12. **Handle late data**: Use allowed lateness settings
+
+---
+
+## Common Exam & Interview Notes
+
+- Flink provides **exactly-once processing** semantics
+- **Stateful processing** maintains context across events
+- **Windowing** groups unbounded streams into finite chunks
+- **Tumbling windows**: Non-overlapping, fixed-size
+- **Hopping windows**: Overlapping, fixed-size
+- **Session windows**: Dynamic, based on inactivity gaps
+- **Checkpoints** enable fault tolerance and recovery
+- **KPU** = 1 vCPU + 4 GB memory
+- Supports **Flink SQL** and **programming APIs** (Java, Scala, Python)
+- Integrates with **Kinesis, MSK, S3, Redshift**
+- **Event time** vs **processing time** for windowing
+- **Watermarks** handle out-of-order data
+- Better than Lambda for **complex stream processing**
+- Better than Kinesis Data Analytics for **advanced use cases**
+- Auto-scaling based on **CPU and backpressure**
+
+---
+
+## Summary
+
+- Managed Flink processes streaming data with SQL or code
+- Stateful processing enables complex event patterns
+- Windowing aggregates unbounded streams
+- Exactly-once processing guarantees data accuracy
+- Checkpoints provide fault tolerance
+- Auto-scaling handles variable workloads
+- Essential for real-time analytics and complex stream processing

@@ -1,0 +1,397 @@
+---
+title: "SNS Guide"
+description: "SNS Guide"
+---
+
+# AWS SNS Developer Guide
+
+This guide explains **Amazon SNS concepts** in a **practical, developer-focused way**, including **topics, subscriptions, message filtering, fanout patterns, and delivery policies**, using real application examples.
+
+---
+
+## Table of Contents
+
+1. [What is AWS SNS](#what-is-aws-sqs)
+2. [Where SNS Fits in an Application](#where-sns-fits-in-an-application)
+3. [SNS Topics and Subscriptions](#sns-topics-and-subscriptions)
+4. [Message Publishing](#message-publishing)
+5. [Subscription Protocols](#subscription-protocols)
+6. [Message Filtering](#message-filtering)
+7. [SNS + SQS Fanout Pattern](#sns--sqs-fanout-pattern)
+8. [Message Attributes and Structure](#message-attributes-and-structure)
+9. [Delivery Policies and Retries](#delivery-policies-and-retries)
+10. [Real Application Example: Order Notifications](#real-application-example-order-notifications)
+11. [Best Practices](#best-practices)
+12. [Common Exam & Interview Notes](#common-exam--interview-notes)
+
+---
+
+## What is AWS SNS
+
+**Amazon SNS (Simple Notification Service)** is a **fully managed pub/sub messaging service** that enables **one-to-many message delivery** to multiple subscribers.
+
+**Core idea**:
+
+> SNS broadcasts messages from publishers to multiple subscribers simultaneously.
+
+---
+
+## Where SNS Fits in an Application
+
+### Typical Architecture
+
+```
+Backend API (EC2 / Lambda)
+        ↓
+      SNS Topic
+        ↓
+    ┌───┴───┬───────┬─────────┐
+    ↓       ↓       ↓         ↓
+  Email    SMS    SQS     Lambda
+```
+
+**Use SNS when**:
+
+- Multiple systems need the same event
+- You need to notify users (email, SMS, push)
+- You want to decouple event producers from consumers
+- You need to broadcast messages
+
+---
+
+## SNS Topics and Subscriptions
+
+### Topic
+
+A **topic** is a communication channel that acts as an access point for publishers and subscribers.
+
+**Key characteristics**:
+
+- Can have multiple subscribers
+- Publishers send one message
+- All subscribers receive a copy
+
+### Subscription
+
+A **subscription** connects an endpoint (email, SQS, Lambda, etc.) to a topic.
+
+### Example Flow
+
+```
+Publisher → Topic → Subscription 1 (Email)
+                 → Subscription 2 (SQS)
+                 → Subscription 3 (Lambda)
+```
+
+---
+
+## Message Publishing
+
+### Publishing Methods
+
+- AWS SDK
+- AWS CLI
+- AWS Console
+- AWS Services (S3, CloudWatch, etc.)
+
+### Message Structure
+
+```json
+{
+  "Message": "Order #12345 has been shipped",
+  "Subject": "Order Update",
+  "MessageAttributes": {
+    "orderStatus": {
+      "DataType": "String",
+      "StringValue": "shipped"
+    }
+  }
+}
+```
+
+### Important Notes
+
+- Maximum message size: **256 KB**
+- Messages are not stored (fire and forget)
+- No message replay capability
+
+---
+
+## Subscription Protocols
+
+SNS supports multiple protocols:
+
+### HTTP/HTTPS
+
+- Webhooks to external services
+- Requires endpoint confirmation
+
+### Email
+
+- Plain text email notifications
+- Requires subscriber confirmation
+
+### Email-JSON
+
+- Structured JSON in email body
+- For programmatic parsing
+
+### SMS
+
+- Text messages to phone numbers
+- Regional availability varies
+
+### SQS
+
+- Delivers to SQS queue
+- Enables asynchronous processing
+
+### Lambda
+
+- Triggers Lambda function directly
+- Serverless event processing
+
+### Application (Mobile Push)
+
+- Push notifications to mobile devices
+- Supports iOS, Android, Fire OS
+
+### Firehose
+
+- Stream to data lakes
+- For analytics and archival
+
+---
+
+## Message Filtering
+
+**Message filtering** allows subscribers to receive only messages they're interested in.
+
+### Filter Policy
+
+Defined in JSON format on the subscription:
+
+```json
+{
+  "orderStatus": ["shipped", "delivered"],
+  "price": [{ "numeric": [">", 100] }]
+}
+```
+
+### How It Works
+
+```
+SNS Topic
+    ↓
+  Filter Policy (orderStatus = "shipped")
+    ↓
+Subscription (Email) ← Only receives shipped orders
+```
+
+### Benefits
+
+- Reduces unnecessary message delivery
+- Lowers costs
+- Simplifies subscriber logic
+
+---
+
+## SNS + SQS Fanout Pattern
+
+The **fanout pattern** combines SNS and SQS for reliable, parallel processing.
+
+### Architecture
+
+```
+Backend API
+    ↓
+SNS Topic
+    ↓
+  ┌─┴─────┬─────────┬──────────┐
+  ↓       ↓         ↓          ↓
+SQS 1   SQS 2    SQS 3      Email
+  ↓       ↓         ↓
+Worker  Worker   Worker
+```
+
+### Why Use This Pattern
+
+- **Reliability**: SQS queues buffer messages
+- **Parallel Processing**: Multiple services process independently
+- **Decoupling**: Services don't know about each other
+- **Retry Logic**: Each SQS has its own retry policy
+
+### Example Use Case
+
+Order placed:
+
+- Inventory service receives message
+- Shipping service receives message
+- Analytics service receives message
+- Customer receives email
+
+All happen simultaneously and independently.
+
+---
+
+## Message Attributes and Structure
+
+### Standard Format
+
+When SNS delivers to SQS or HTTP, it wraps the message:
+
+```json
+{
+  "Type": "Notification",
+  "MessageId": "abc-123",
+  "TopicArn": "arn:aws:sns:us-east-1:123:MyTopic",
+  "Subject": "Order Update",
+  "Message": "Your actual message content",
+  "Timestamp": "2025-01-15T10:30:00.000Z",
+  "MessageAttributes": {
+    "orderStatus": {
+      "Type": "String",
+      "Value": "shipped"
+    }
+  }
+}
+```
+
+### Raw Message Delivery
+
+For SQS and HTTP subscriptions, you can enable **RawMessageDelivery**:
+
+- Skips SNS envelope
+- Delivers original message directly
+- Cleaner for consumers
+
+---
+
+## Delivery Policies and Retries
+
+### Default Retry Policy
+
+SNS automatically retries failed deliveries:
+
+- HTTP/HTTPS: 3 retries over 20 seconds
+- Lambda: 2 retries
+- SQS: Retries until delivery succeeds
+
+### Custom Delivery Policy
+
+```json
+{
+  "http": {
+    "defaultHealthyRetryPolicy": {
+      "minDelayTarget": 5,
+      "maxDelayTarget": 300,
+      "numRetries": 5,
+      "backoffFunction": "exponential"
+    }
+  }
+}
+```
+
+### Delivery Status Logging
+
+- Track successful and failed deliveries
+- Logs to CloudWatch
+- Useful for monitoring
+
+---
+
+## Real Application Example: Order Notifications
+
+### Scenario
+
+User places an order for $150.
+
+### Flow
+
+```
+1. API receives order
+2. API saves to RDS
+3. API publishes to SNS "OrderEvents" topic
+```
+
+### Message
+
+```json
+{
+  "orderId": "12345",
+  "status": "placed",
+  "amount": 150,
+  "userId": "user-789"
+}
+```
+
+### Subscriptions
+
+**Email Subscription** (with filter):
+
+- Filter: `amount > 100`
+- Action: Send order confirmation email
+
+**SQS Inventory Queue**:
+
+- No filter
+- Action: Worker updates inventory
+
+**SQS Analytics Queue**:
+
+- No filter
+- Action: Worker logs event to data warehouse
+
+**Lambda Function**:
+
+- Filter: `status = "placed"`
+- Action: Send push notification to mobile app
+
+### Result
+
+- User receives email (amount > 100)
+- Inventory is updated
+- Analytics logged
+- Push notification sent
+- All happen simultaneously
+
+---
+
+## Best Practices
+
+1. **Use SNS for broadcasting**, SQS for queuing
+2. **Enable message filtering** to reduce costs
+3. **Use fanout pattern** for parallel processing
+4. **Enable raw message delivery** for cleaner messages
+5. **Set up CloudWatch alarms** for failed deliveries
+6. **Use message attributes** for metadata
+7. **Confirm subscriptions** properly (email, HTTP)
+8. **Consider message size limits** (256 KB)
+9. **Use DLQ with SQS subscriptions** for reliability
+10. **Monitor delivery metrics** in CloudWatch
+
+---
+
+## Common Exam & Interview Notes
+
+- SNS is **push-based**, SQS is **pull-based**
+- SNS delivers to **multiple subscribers** simultaneously
+- Messages are **not stored** (no replay)
+- Maximum message size: **256 KB**
+- SNS + SQS fanout enables **parallel processing**
+- **Message filtering** reduces unnecessary deliveries
+- **Raw message delivery** removes SNS envelope
+- Subscriptions require **confirmation** (email, HTTP)
+- SNS supports **mobile push notifications**
+- Use SNS for **event-driven architectures**
+
+---
+
+## Summary
+
+- SNS broadcasts messages to multiple subscribers
+- Topics enable pub/sub patterns
+- Supports multiple protocols (email, SMS, SQS, Lambda, HTTP)
+- Message filtering reduces costs and complexity
+- SNS + SQS fanout enables reliable parallel processing
+- Essential for event-driven and microservices architectures

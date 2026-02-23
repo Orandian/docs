@@ -1,0 +1,596 @@
+---
+title: "Spring Boot CI/CD Setup Guide"
+description: "Spring Boot CI/CD Setup Guide"
+---
+
+# Spring Boot CI/CD Setup Guide
+## Automated Deployment to EC2 Ubuntu with GitHub Actions & Caddy
+
+This guide walks you through setting up a complete CI/CD pipeline for Spring Boot applications using GitHub Actions, EC2 Ubuntu, and Caddy reverse proxy with automatic HTTPS.
+
+---
+
+## Table of Contents
+1. [Prerequisites](#prerequisites)
+2. [EC2 Server Setup](#ec2-server-setup)
+3. [Secure Application Properties](#secure-application-properties)
+4. [GitHub Actions Workflow](#github-actions-workflow)
+5. [Caddy Reverse Proxy Setup](#caddy-reverse-proxy-setup)
+6. [GitHub Secrets Configuration](#github-secrets-configuration)
+7. [Testing & Verification](#testing--verification)
+8. [Troubleshooting](#troubleshooting)
+
+---
+
+## Prerequisites
+
+### Local Machine
+- Git installed
+- SSH key pair (`.pem` file) for EC2 access
+- Maven project with Spring Boot
+
+### AWS Account
+- EC2 Ubuntu instance (t2.micro or higher)
+- Security groups configured (see below)
+- RDS PostgreSQL database (optional)
+
+---
+
+## EC2 Server Setup
+
+### 1. Launch EC2 Instance
+- **AMI:** Ubuntu 24.04 LTS
+- **Instance Type:** t2.micro (or higher)
+- **Key Pair:** Create or use existing `.pem` file
+
+### 2. Configure Security Groups
+
+#### EC2 Security Group Inbound Rules:
+| Type | Protocol | Port | Source | Description |
+|------|----------|------|--------|-------------|
+| SSH | TCP | 22 | Your IP or GitHub Actions IPs | SSH access |
+| HTTP | TCP | 80 | 0.0.0.0/0 | HTTP traffic |
+| HTTPS | TCP | 443 | 0.0.0.0/0 | HTTPS traffic |
+| Custom TCP | TCP | 8080 | 0.0.0.0/0 | Spring Boot (optional if using Caddy) |
+
+#### RDS Security Group Inbound Rules (if using RDS):
+| Type | Protocol | Port | Source | Description |
+|------|----------|------|--------|-------------|
+| PostgreSQL | TCP | 5432 | EC2 Security Group ID | Database access from EC2 |
+
+### 3. Install Java 17 on EC2
+```bash
+ssh -i your-key.pem ubuntu@YOUR_EC2_IP
+
+sudo apt update
+sudo apt install -y openjdk-17-jre-headless
+java -version
+```
+
+### 4. Create Application Directory
+```bash
+sudo mkdir -p /opt/YOUR_APP_NAME
+sudo chown ubuntu:ubuntu /opt/YOUR_APP_NAME
+```
+
+### 5. Install Caddy (Optional - for HTTPS)
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install caddy
+```
+
+---
+
+## Secure Application Properties
+
+### 1. Update `application.properties`
+
+Replace hardcoded credentials with environment variables:
+
+```properties
+# Database
+spring.datasource.url=${DB_URL:jdbc:postgresql://your-db-host:5432/your_db}
+spring.datasource.username=${DB_USERNAME:postgres}
+spring.datasource.password=${DB_PASSWORD}
+
+# Email (if using)
+spring.mail.username=${MAIL_USERNAME:your-email@gmail.com}
+spring.mail.password=${MAIL_PASSWORD}
+
+# AWS Credentials (if using)
+cloud.aws.credentials.access-key=${AWS_ACCESS_KEY}
+cloud.aws.credentials.secret-key=${AWS_SECRET_KEY}
+```
+
+### 2. Create `.env.example`
+
+```bash
+# Database credentials
+DB_PASSWORD=your_database_password
+
+# Email credentials
+MAIL_PASSWORD=your_gmail_app_password
+
+# AWS credentials
+AWS_ACCESS_KEY=your_aws_access_key
+AWS_SECRET_KEY=your_aws_secret_key
+```
+
+### 3. Update `.gitignore`
+
+```gitignore
+# Environment variables
+.env
+
+# Maven build output
+target/
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Log files
+*.log
+```
+
+---
+
+## GitHub Actions Workflow
+
+### Create `.github/workflows/deploy-dev.yml`
+
+```yaml
+name: Deploy to Dev
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build with Maven
+        run: mvn clean package -DskipTests -T 1C
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT }}
+          source: "target/YOUR_APP_NAME-0.0.1-SNAPSHOT.jar"
+          target: "~/YOUR_APP_NAME/"
+
+      - name: Restart application on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT }}
+          envs: DB_PASSWORD,MAIL_PASSWORD,AWS_ACCESS_KEY,AWS_SECRET_KEY
+          script: |
+            # Copy new JAR to app directory
+            sudo mkdir -p /opt/YOUR_APP_NAME
+            sudo cp ~/YOUR_APP_NAME/target/YOUR_APP_NAME-0.0.1-SNAPSHOT.jar /opt/YOUR_APP_NAME/app.jar
+            
+            # Update systemd service with environment variables
+            sudo tee /etc/systemd/system/YOUR_APP_NAME.service > /dev/null <<EOF
+            [Unit]
+            Description=Your Spring Boot Application
+            After=network.target
+            
+            [Service]
+            Type=simple
+            User=ubuntu
+            WorkingDirectory=/opt/YOUR_APP_NAME
+            ExecStart=/usr/bin/java -jar /opt/YOUR_APP_NAME/app.jar
+            Restart=on-failure
+            RestartSec=10
+            StandardOutput=append:/opt/YOUR_APP_NAME/app.log
+            StandardError=append:/opt/YOUR_APP_NAME/app.log
+            Environment="DB_PASSWORD=$DB_PASSWORD"
+            Environment="MAIL_PASSWORD=$MAIL_PASSWORD"
+            Environment="AWS_ACCESS_KEY=$AWS_ACCESS_KEY"
+            Environment="AWS_SECRET_KEY=$AWS_SECRET_KEY"
+            
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            
+            # Reload systemd and restart service
+            sudo systemctl daemon-reload
+            sudo systemctl enable YOUR_APP_NAME
+            sudo systemctl restart YOUR_APP_NAME
+            
+            # Wait and verify
+            sleep 5
+            if sudo systemctl is-active --quiet YOUR_APP_NAME; then
+              echo "Application started successfully"
+            else
+              echo "Failed to start application"
+              sudo journalctl -u YOUR_APP_NAME -n 50
+              exit 1
+            fi
+            
+            # Reload Caddy (if running)
+            if sudo systemctl is-active --quiet caddy; then
+              echo "Reloading Caddy..."
+              sudo systemctl reload caddy
+            fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YOUR_APP_NAME-jar
+          path: target/YOUR_APP_NAME-0.0.1-SNAPSHOT.jar
+```
+
+**Important:** Replace `YOUR_APP_NAME` with your actual application name throughout the file.
+
+---
+
+## Caddy Reverse Proxy Setup
+
+### 1. Create Caddyfile
+
+```bash
+ssh -i your-key.pem ubuntu@YOUR_EC2_IP
+sudo nano /etc/caddy/Caddyfile
+```
+
+### 2. Add Configuration
+
+```caddy
+YOUR_EC2_IP.nip.io {
+    # Let's Encrypt will automatically provision SSL certificate
+    
+    reverse_proxy localhost:8080 {
+        header_up Host {http.request.host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+```
+
+Replace `YOUR_EC2_IP` with your actual EC2 public IP address.
+
+### 3. Reload Caddy
+
+```bash
+sudo systemctl reload caddy
+sudo systemctl status caddy
+```
+
+---
+
+## GitHub Secrets Configuration
+
+Go to your GitHub repository:
+**Settings → Secrets and variables → Actions → New repository secret**
+
+### Required Secrets:
+
+| Secret Name | Description | Example Value |
+|-------------|-------------|---------------|
+| `EC2_HOST` | EC2 public IP or domain | `54.123.45.67` |
+| `EC2_USERNAME` | SSH username | `ubuntu` |
+| `EC2_SSH_KEY` | Private key content | Content of your `.pem` file |
+| `EC2_PORT` | SSH port | `22` |
+| `DB_PASSWORD` | Database password | Your actual DB password |
+| `MAIL_PASSWORD` | Email password | Gmail app password |
+| `AWS_ACCESS_KEY` | AWS access key | `AKIA...` |
+| `AWS_SECRET_KEY` | AWS secret key | Your AWS secret key |
+
+### How to Get SSH Key Content:
+```bash
+cat ~/path/to/your-key.pem
+```
+Copy the **entire output** including:
+```
+-----BEGIN RSA PRIVATE KEY-----
+[your key content]
+-----END RSA PRIVATE KEY-----
+```
+
+---
+
+## Testing & Verification
+
+### 1. Test Locally
+
+```bash
+# Set environment variables
+export DB_PASSWORD="your_password"
+export MAIL_PASSWORD="your_mail_password"
+export AWS_ACCESS_KEY="your_access_key"
+export AWS_SECRET_KEY="your_secret_key"
+
+# Run application
+mvn spring-boot:run
+```
+
+### 2. Test CI/CD Pipeline
+
+```bash
+# Commit and push to dev branch
+git checkout dev
+git add .
+git commit -m "Test CI/CD deployment"
+git push origin dev
+```
+
+### 3. Monitor Deployment
+
+1. Go to **GitHub Actions** tab in your repository
+2. Watch the workflow progress
+3. Check for any errors
+
+### 4. Verify on EC2
+
+```bash
+# SSH into EC2
+ssh -i your-key.pem ubuntu@YOUR_EC2_IP
+
+# Check service status
+sudo systemctl status YOUR_APP_NAME
+
+# Check logs
+tail -f /opt/YOUR_APP_NAME/app.log
+
+# Or check with journalctl
+sudo journalctl -u YOUR_APP_NAME -f
+```
+
+### 5. Test Application Endpoint
+
+```bash
+# Test with HTTPS (if using Caddy)
+curl -I https://YOUR_EC2_IP.nip.io
+
+# Test with HTTP
+curl -I http://YOUR_EC2_IP:8080
+
+# Expected response: HTTP 401 (if Spring Security is enabled)
+```
+
+---
+
+## Troubleshooting
+
+### Application Won't Start
+
+**Check logs:**
+```bash
+sudo journalctl -u YOUR_APP_NAME -n 100
+tail -100 /opt/YOUR_APP_NAME/app.log
+```
+
+**Common issues:**
+- Missing environment variables
+- Database connection timeout
+- Port already in use
+- Insufficient memory
+
+### Database Connection Failed
+
+**Test connectivity:**
+```bash
+nc -zv your-db-host 5432
+```
+
+**Solution:** Update RDS security group to allow EC2 access
+
+### SSL Certificate Error
+
+**Using self-signed certificate:**
+```bash
+curl -Ik https://YOUR_EC2_IP.nip.io
+```
+
+**Solution:** Update Caddyfile to use Let's Encrypt (remove `tls internal`)
+
+### Workflow Failed
+
+**Check GitHub Actions logs:**
+1. Go to Actions tab
+2. Click on failed workflow
+3. Review error messages
+
+**Common issues:**
+- Missing GitHub secrets
+- Wrong SSH key format
+- Network connectivity issues
+
+### Check Service Status
+
+```bash
+# Application status
+sudo systemctl status YOUR_APP_NAME
+
+# Caddy status
+sudo systemctl status caddy
+
+# Restart services
+sudo systemctl restart YOUR_APP_NAME
+sudo systemctl reload caddy
+```
+
+### Check Environment Variables
+
+```bash
+sudo systemctl show YOUR_APP_NAME | grep Environment
+```
+
+### Check Disk Space
+
+```bash
+df -h
+```
+
+### Check Memory
+
+```bash
+free -h
+```
+
+### View Caddy Logs
+
+```bash
+tail -f /var/log/caddy/access.log
+sudo journalctl -u caddy -f
+```
+
+---
+
+## Directory Structure
+
+```
+your-spring-boot-app/
+├── .github/
+│   └── workflows/
+│       └── deploy-dev.yml
+├── src/
+│   └── main/
+│       └── resources/
+│           └── application.properties
+├── .gitignore
+├── .env.example
+├── pom.xml
+└── CI_CD_SETUP_GUIDE.md
+```
+
+---
+
+## Quick Reference Commands
+
+### On EC2 Server:
+
+```bash
+# View application logs
+tail -f /opt/YOUR_APP_NAME/app.log
+
+# Restart application
+sudo systemctl restart YOUR_APP_NAME
+
+# Check application status
+sudo systemctl status YOUR_APP_NAME
+
+# Reload Caddy
+sudo systemctl reload caddy
+
+# Test database connection
+nc -zv your-db-host 5432
+
+# Test application
+curl http://localhost:8080
+```
+
+### On Local Machine:
+
+```bash
+# Build and test locally
+mvn clean package
+mvn spring-boot:run
+
+# Deploy to dev
+git push origin dev
+
+# SSH to EC2
+ssh -i your-key.pem ubuntu@YOUR_EC2_IP
+```
+
+---
+
+## Best Practices
+
+1. **Always use environment variables for secrets** - Never commit credentials
+2. **Test locally first** - Ensure app runs before deploying
+3. **Monitor logs** - Check logs after each deployment
+4. **Use branches** - Deploy `dev` branch to dev server, `main` to production
+5. **Backup database** - Regular backups before deployments
+6. **Keep dependencies updated** - Regular security updates
+7. **Use HTTPS** - Always enable SSL in production
+8. **Set up monitoring** - Use CloudWatch or similar tools
+
+---
+
+## Additional Features to Add
+
+### Health Check Endpoint
+
+Add to `application.properties`:
+```properties
+management.endpoints.web.exposure.include=health,info
+management.endpoint.health.show-details=always
+```
+
+### Multiple Environments
+
+Create separate workflows:
+- `deploy-dev.yml` - Deploys to dev server
+- `deploy-staging.yml` - Deploys to staging server
+- `deploy-prod.yml` - Deploys to production server
+
+### Automated Rollback
+
+Add rollback step in workflow:
+```yaml
+- name: Rollback on failure
+  if: failure()
+  run: |
+    # Copy previous version and restart
+```
+
+### Database Migrations
+
+Add Flyway or Liquibase to `pom.xml` for automated migrations.
+
+---
+
+## Support & Resources
+
+- **GitHub Actions Documentation:** https://docs.github.com/en/actions
+- **Caddy Documentation:** https://caddyserver.com/docs/
+- **Spring Boot Documentation:** https://spring.io/projects/spring-boot
+- **AWS EC2 Documentation:** https://docs.aws.amazon.com/ec2/
+
+---
+
+## License
+
+This guide is provided as-is for educational and development purposes.
+
+---
+
+**Created:** November 2025  
+**Last Updated:** November 2025

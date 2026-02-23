@@ -66,6 +66,87 @@
             ]
           }
         ]
+      },
+      {
+        "tab": "Dev Solutions",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "dev-solutions/index"
+            ]
+          },
+          {
+            "group": "Nest",
+            "pages": [
+              "dev-solutions/nest/server-setup"
+            ]
+          },
+          {
+            "group": "Git",
+            "pages": [
+              "dev-solutions/git/merge-conflict",
+              "dev-solutions/git/detached-head",
+              "dev-solutions/git/branching-merging",
+              "dev-solutions/git/industry-git-commands"
+            ]
+          },
+          {
+            "group": "Hosting",
+            "pages": [
+              "dev-solutions/hosting/vercel-deploy"
+            ]
+          },
+          {
+            "group": "Caddy",
+            "pages": [
+              "dev-solutions/caddy/ssl-renewal"
+            ]
+          },
+          {
+            "group": "CI/CD",
+            "pages": [
+              "dev-solutions/ci-cd/spring-boot-ci-cd-setup-guide"
+            ]
+          },
+          {
+            "group": "Docker",
+            "pages": [
+              "dev-solutions/docker/docker-process-guide",
+              "dev-solutions/docker/essential-docker-commands"
+            ]
+          },
+          {
+            "group": "AWS",
+            "pages": [
+              "dev-solutions/aws/aws-sqs-guide",
+              "dev-solutions/aws/aws-sns-guide",
+              "dev-solutions/aws/aws-kinesis-data-streams",
+              "dev-solutions/aws/sqs-vs-sns-vs-kinesis",
+              "dev-solutions/aws/aws-apache-flink",
+              "dev-solutions/aws/aws-data-firehose",
+              "dev-solutions/aws/aws-ai-practitioner"
+            ]
+          },
+          {
+            "group": "Kubernetes",
+            "pages": [
+              "dev-solutions/kubernetes/kubernetes-comprehensive-guide"
+            ]
+          },
+          {
+            "group": "Expo",
+            "pages": [
+              "dev-solutions/expo/expo-solutions-guide"
+            ]
+          },
+          {
+            "group": "React",
+            "pages": [
+              "dev-solutions/react/state-management"
+            ]
+          }
+        ]
       }
     ],
     "global": {
@@ -102,15 +183,15 @@
   },
   "contextual": {
     "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
+      "copy",
+      "view",
+      "chatgpt",
+      "claude",
+      "perplexity",
+      "mcp",
+      "cursor",
+      "vscode"
+    ]
   },
   "footer": {
     "socials": {

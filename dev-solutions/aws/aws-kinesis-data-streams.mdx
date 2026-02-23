@@ -1,0 +1,484 @@
+---
+title: "Kinesis Data Streams"
+description: "Kinesis Data Streams"
+---
+
+# AWS Kinesis Data Streams Developer Guide
+
+This guide explains **Amazon Kinesis Data Streams concepts** in a **practical, developer-focused way**, including **shards, partition keys, consumers, scaling, and real-time processing**, using real application examples.
+
+---
+
+## Table of Contents
+
+1. [What is AWS Kinesis Data Streams](#what-is-aws-kinesis-data-streams)
+2. [Where Kinesis Fits in an Application](#where-kinesis-fits-in-an-application)
+3. [Kinesis vs SQS vs SNS](#kinesis-vs-sqs-vs-sns)
+4. [Core Concepts: Streams and Shards](#core-concepts-streams-and-shards)
+5. [Partition Keys and Data Distribution](#partition-keys-and-data-distribution)
+6. [Producers: Writing Data](#producers-writing-data)
+7. [Consumers: Reading Data](#consumers-reading-data)
+8. [Data Retention](#data-retention)
+9. [Scaling and Resharding](#scaling-and-resharding)
+10. [Enhanced Fan-Out](#enhanced-fan-out)
+11. [Real Application Example: Clickstream Analytics](#real-application-example-clickstream-analytics)
+12. [Best Practices](#best-practices)
+13. [Common Exam & Interview Notes](#common-exam--interview-notes)
+
+---
+
+## What is AWS Kinesis Data Streams
+
+**Amazon Kinesis Data Streams** is a **real-time data streaming service** that enables you to **collect, process, and analyze streaming data at scale**.
+
+**Core idea**:
+
+> Kinesis captures high-volume, real-time data and allows multiple consumers to process it independently.
+
+---
+
+## Where Kinesis Fits in an Application
+
+### Typical Architecture
+
+```
+IoT Devices / Apps / Logs
+        ↓
+   Kinesis Stream
+        ↓
+    ┌───┴────┬────────┬─────────┐
+    ↓        ↓        ↓         ↓
+Lambda   Lambda   Firehose   Analytics
+    ↓        ↓        ↓         ↓
+  DynamoDB  S3   Data Lake  Dashboard
+```
+
+**Use Kinesis when**:
+
+- Processing real-time data streams
+- Multiple consumers need the same data
+- Data needs to be replayed
+- High throughput required (MB/sec)
+
+---
+
+## Kinesis vs SQS vs SNS
+
+| Feature        | Kinesis             | SQS             | SNS           |
+| -------------- | ------------------- | --------------- | ------------- |
+| **Pattern**    | Streaming           | Queue           | Pub/Sub       |
+| **Data Flow**  | Pull                | Pull            | Push          |
+| **Consumers**  | Multiple            | Single          | Multiple      |
+| **Ordering**   | Per shard           | FIFO only       | No            |
+| **Retention**  | 1-365 days          | Up to 14 days   | None          |
+| **Replay**     | Yes                 | No              | No            |
+| **Throughput** | MB/sec              | Messages/sec    | Messages/sec  |
+| **Use Case**   | Real-time analytics | Background jobs | Notifications |
+
+### When to Use What
+
+**Kinesis**:
+
+- Real-time analytics
+- Log aggregation
+- Clickstream data
+- IoT telemetry
+
+**SQS**:
+
+- Task queues
+- Decoupling services
+- Batch processing
+
+**SNS**:
+
+- Notifications
+- Event broadcasting
+- Alerts
+
+---
+
+## Core Concepts: Streams and Shards
+
+### Stream
+
+A **stream** is a logical grouping of shards that holds your data records.
+
+### Shard
+
+A **shard** is a unit of capacity in a stream.
+
+**Each shard provides**:
+
+- **Write capacity**: 1 MB/sec or 1,000 records/sec
+- **Read capacity**: 2 MB/sec (standard) or 2 MB/sec per consumer (enhanced)
+
+### Example
+
+```
+Stream: "ClickstreamData"
+    ├── Shard 1 (1 MB/sec write, 2 MB/sec read)
+    ├── Shard 2 (1 MB/sec write, 2 MB/sec read)
+    └── Shard 3 (1 MB/sec write, 2 MB/sec read)
+
+Total: 3 MB/sec write, 6 MB/sec read
+```
+
+### Shard Count
+
+- Minimum: 1 shard
+- Maximum: No limit (request increase)
+- Cost: Per shard-hour
+
+---
+
+## Partition Keys and Data Distribution
+
+### Partition Key
+
+A **partition key** determines which shard receives the data record.
+
+### How It Works
+
+```
+Data Record + Partition Key
+        ↓
+    MD5 Hash
+        ↓
+  Shard Selection (based on hash range)
+```
+
+### Example
+
+```
+Record 1: userId = "user123" → Shard 1
+Record 2: userId = "user456" → Shard 2
+Record 3: userId = "user123" → Shard 1 (same user, same shard)
+```
+
+### Ordering Guarantee
+
+Records with the **same partition key** go to the **same shard** and maintain order.
+
+### Important Rules
+
+- Choose partition keys with **high cardinality**
+- Avoid hot shards (uneven distribution)
+- Same partition key = same shard = ordered
+
+---
+
+## Producers: Writing Data
+
+### Producer Types
+
+**AWS SDK**:
+
+- PutRecord (single record)
+- PutRecords (batch up to 500 records)
+
+**Kinesis Producer Library (KPL)**:
+
+- Automatic batching
+- Compression
+- Retries
+- Higher throughput
+
+**Kinesis Agent**:
+
+- For log files
+- Pre-built monitoring
+
+### Writing Data
+
+```java
+PutRecordRequest request = PutRecordRequest.builder()
+    .streamName("ClickstreamData")
+    .partitionKey("user123")  // Determines shard
+    .data(SdkBytes.fromUtf8String(jsonData))
+    .build();
+
+kinesis.putRecord(request);
+```
+
+### Limits
+
+- Maximum record size: **1 MB**
+- Maximum throughput per shard: **1 MB/sec** or **1,000 records/sec**
+
+---
+
+## Consumers: Reading Data
+
+### Consumer Types
+
+### 1. Kinesis Client Library (KCL)
+
+**Characteristics**:
+
+- Manages distributed consumption
+- Checkpointing (DynamoDB)
+- Load balancing across consumers
+- 2 MB/sec per shard (shared)
+
+**Use when**: Multiple application instances reading
+
+### 2. AWS SDK (GetRecords)
+
+**Characteristics**:
+
+- Direct API calls
+- Manual shard management
+- 2 MB/sec per shard (shared)
+- 5 GetRecords calls/sec per shard
+
+**Use when**: Simple, single consumer
+
+### 3. Lambda
+
+**Characteristics**:
+
+- Event-driven processing
+- Automatic scaling
+- Built-in checkpointing
+- Batch processing
+
+**Use when**: Serverless processing needed
+
+### 4. Kinesis Data Analytics
+
+**Characteristics**:
+
+- SQL queries on streams
+- Real-time analytics
+- No code required
+
+**Use when**: SQL-based analysis
+
+---
+
+## Data Retention
+
+### Default Retention
+
+- **24 hours** (default)
+
+### Extended Retention
+
+- Up to **365 days** (additional cost)
+
+### Key Points
+
+- Data is stored across 3 AZs
+- Data can be replayed within retention period
+- Older data automatically expires
+
+### Use Cases for Long Retention
+
+- Compliance requirements
+- Late data processing
+- Reprocessing for bug fixes
+- Audit trails
+
+---
+
+## Scaling and Resharding
+
+### When to Scale
+
+**Scale Up** (split shards):
+
+- High write throughput
+- ProvisionedThroughputExceeded errors
+- Hot shard detected
+
+**Scale Down** (merge shards):
+
+- Low utilization
+- Cost optimization
+
+### Resharding Operations
+
+**Split Shard**:
+
+```
+Shard 1 (1 MB/sec)
+    ↓
+Shard 1.1 (1 MB/sec) + Shard 1.2 (1 MB/sec)
+```
+
+**Merge Shards**:
+
+```
+Shard 1 (0.3 MB/sec) + Shard 2 (0.2 MB/sec)
+    ↓
+Shard 3 (1 MB/sec)
+```
+
+### Important Notes
+
+- Resharding is not instant
+- Old shards remain until data expires
+- Sequential process (one operation at a time)
+- Can take several minutes
+
+### On-Demand Mode
+
+- Automatic scaling
+- No manual resharding
+- Pay per GB
+- 4 MB/sec write per shard (default)
+
+---
+
+## Enhanced Fan-Out
+
+### Standard Consumer
+
+- 2 MB/sec per shard (shared among all consumers)
+- 5 GetRecords API calls/sec per shard
+- 200 ms latency
+
+### Enhanced Fan-Out Consumer
+
+- 2 MB/sec per shard **per consumer**
+- Push model (SubscribeToShard)
+- 70 ms latency
+- Higher cost
+
+### Example
+
+```
+Standard:
+Shard 1 (2 MB/sec total)
+    ↓
+Consumer A (1 MB/sec) + Consumer B (1 MB/sec)
+
+Enhanced Fan-Out:
+Shard 1
+    ├── Consumer A (2 MB/sec)
+    └── Consumer B (2 MB/sec)
+```
+
+### When to Use
+
+- Multiple real-time consumers
+- Low latency required
+- Consumers need independent throughput
+
+---
+
+## Real Application Example: Clickstream Analytics
+
+### Scenario
+
+E-commerce site tracking user clicks in real-time.
+
+### Architecture
+
+```
+Web Application
+    ↓
+Kinesis Stream (3 shards)
+    ↓
+  ┌─────┴─────┬──────────┬────────────┐
+  ↓           ↓          ↓            ↓
+Lambda    Lambda   Firehose    Analytics
+  ↓           ↓          ↓            ↓
+DynamoDB  Redshift     S3      Dashboard
+(real-time) (batch)  (archive) (monitoring)
+```
+
+### Data Flow
+
+**1. Producer (Web App)**:
+
+```javascript
+kinesis.putRecord({
+  StreamName: "ClickstreamData",
+  PartitionKey: userId, // Same user → same shard → ordered
+  Data: JSON.stringify({
+    userId: "user123",
+    action: "click",
+    product: "laptop-x1",
+    timestamp: Date.now(),
+  }),
+});
+```
+
+**2. Consumer 1 (Lambda → DynamoDB)**:
+
+- Real-time user activity tracking
+- Updates user profile
+- Triggers personalized recommendations
+
+**3. Consumer 2 (Lambda → Redshift)**:
+
+- Batch analytics
+- Aggregate hourly metrics
+- Business intelligence
+
+**4. Consumer 3 (Firehose → S3)**:
+
+- Long-term storage
+- Data lake for ML training
+- Compliance archival
+
+**5. Consumer 4 (Kinesis Analytics)**:
+
+- Real-time dashboard
+- Anomaly detection
+- Live metrics
+
+### Key Benefits
+
+- **Real-time**: User behavior tracked instantly
+- **Multiple consumers**: Different teams process independently
+- **Replay**: Can reprocess last 24 hours
+- **Ordered**: Each user's clicks processed in order
+- **Scalable**: Handles millions of events/sec
+
+---
+
+## Best Practices
+
+1. **Choose partition keys wisely**: High cardinality (userId, not status)
+2. **Monitor shard metrics**: Watch for hot shards
+3. **Use KPL for producers**: Better batching and throughput
+4. **Use KCL for consumers**: Handles distributed processing
+5. **Enable enhanced fan-out**: For multiple real-time consumers
+6. **Set appropriate retention**: Balance cost vs replay needs
+7. **Use on-demand mode**: For unpredictable workloads
+8. **Implement error handling**: ProvisionedThroughputExceeded
+9. **Monitor CloudWatch metrics**: IncomingBytes, IncomingRecords
+10. **Consider Kinesis Firehose**: For simple S3/Redshift delivery
+
+---
+
+## Common Exam & Interview Notes
+
+- **1 shard** = 1 MB/sec write, 2 MB/sec read
+- **Partition key** determines shard assignment
+- Same partition key = **same shard** = **ordered**
+- Data retention: **24 hours to 365 days**
+- Multiple consumers can read **independently**
+- **Enhanced fan-out**: 2 MB/sec per consumer per shard
+- **KCL** uses DynamoDB for checkpointing
+- Resharding is **sequential** and takes time
+- Maximum record size: **1 MB**
+- Use **Kinesis** for streaming, **SQS** for queuing
+- **On-demand mode**: Auto-scaling, no shard management
+- Data stored across **3 AZs**
+- Kinesis is **real-time** (sub-second to seconds)
+
+---
+
+## Summary
+
+- Kinesis handles real-time streaming data at scale
+- Shards provide predictable capacity units
+- Partition keys ensure ordering and distribution
+- Multiple consumers can process data independently
+- Data can be replayed within retention period
+- Enhanced fan-out enables low-latency, high-throughput consumption
+- Essential for real-time analytics and event-driven architectures

@@ -1,0 +1,770 @@
+---
+title: "SQS vs SNS vs Kinesis"
+description: "SQS vs SNS vs Kinesis"
+---
+
+# SQS vs SNS vs Kinesis - Complete Comparison Guide
+
+This guide provides a **comprehensive comparison** of **AWS messaging and streaming services**, helping you choose the right service for your use case with **practical examples and decision frameworks**.
+
+---
+
+## Table of Contents
+
+1. [Quick Comparison Table](#quick-comparison-table)
+2. [Core Differences Explained](#core-differences-explained)
+3. [SQS Deep Dive](#sqs-deep-dive)
+4. [SNS Deep Dive](#sns-deep-dive)
+5. [Kinesis Deep Dive](#kinesis-deep-dive)
+6. [Decision Framework](#decision-framework)
+7. [Common Patterns and Combinations](#common-patterns-and-combinations)
+8. [Real-World Scenarios](#real-world-scenarios)
+9. [Cost Comparison](#cost-comparison)
+10. [When to Use What](#when-to-use-what)
+
+---
+
+## Quick Comparison Table
+
+| Feature | SQS | SNS | Kinesis Data Streams |
+|---------|-----|-----|---------------------|
+| **Pattern** | Message Queue | Pub/Sub | Streaming |
+| **Data Flow** | Pull (polling) | Push | Pull (polling) |
+| **Consumers** | Single (per message) | Multiple | Multiple |
+| **Ordering** | FIFO queues only | No | Per shard (partition key) |
+| **Message Persistence** | Up to 14 days | None (fire & forget) | 1-365 days |
+| **Replay** | No | No | Yes |
+| **Throughput** | Unlimited (Standard) | Unlimited | Per shard (1 MB/sec write) |
+| **Latency** | Seconds | Real-time (push) | Real-time (200ms) |
+| **Delivery** | At-least-once (Standard) | At-least-once | At-least-once |
+| **Scaling** | Automatic | Automatic | Manual/Auto (shards) |
+| **Cost Model** | Per request | Per request | Per shard-hour |
+| **Primary Use Case** | Task queues | Broadcasting events | Stream processing |
+
+---
+
+## Core Differences Explained
+
+### 1. Message vs Event vs Stream
+
+**SQS - Message Queue**:
+```
+Producer → Queue → Consumer (one at a time)
+
+Message: "Send email to user@example.com"
+```
+
+**SNS - Event Notification**:
+```
+Publisher → Topic → All Subscribers (simultaneously)
+
+Event: "Order #123 was placed"
+```
+
+**Kinesis - Data Stream**:
+```
+Producer → Stream → Multiple Consumers (independently)
+
+Stream: Continuous flow of clickstream data
+```
+
+### 2. Pull vs Push
+
+**SQS** (Pull):
+```
+Consumer: "Give me messages" → SQS → Messages
+Consumer: "Give me messages" → SQS → Empty
+```
+
+**SNS** (Push):
+```
+Publisher → SNS → Pushes to all subscribers immediately
+```
+
+**Kinesis** (Pull):
+```
+Consumer: "Give me records from shard 1" → Kinesis → Records
+Consumer: "Give me records from shard 2" → Kinesis → Records
+```
+
+### 3. One Consumer vs Many
+
+**SQS**:
+```
+Message in queue → Consumed by ONE worker
+(Message deleted after processing)
+```
+
+**SNS**:
+```
+Event published → Delivered to ALL subscribers
+(Each subscriber gets a copy)
+```
+
+**Kinesis**:
+```
+Record in stream → Read by MULTIPLE consumers independently
+(Record stays in stream for retention period)
+```
+
+---
+
+## SQS Deep Dive
+
+### What It Does
+
+Decouples producers from consumers using a **reliable message queue**.
+
+### Architecture
+
+```
+API (Producer)
+    ↓
+SQS Queue (buffer)
+    ↓
+Worker 1 ← polls
+Worker 2 ← polls
+Worker 3 ← polls
+```
+
+### Key Characteristics
+
+**Standard Queue**:
+* Unlimited throughput
+* At-least-once delivery (possible duplicates)
+* Best-effort ordering
+* Use for: Most async tasks
+
+**FIFO Queue**:
+* 300 TPS (without batching)
+* Exactly-once processing
+* Strict ordering (per MessageGroupId)
+* Use for: Payments, state transitions
+
+### When to Use SQS
+
+✅ Background job processing
+✅ Decoupling microservices
+✅ Load leveling
+✅ Delayed execution
+✅ Retry logic needed
+
+❌ Broadcasting to multiple services
+❌ Real-time streaming analytics
+❌ Data replay required
+
+### Example Use Case
+
+**Order Processing**:
+```
+1. User places order
+2. API saves to database
+3. API sends message to SQS: "Process order #123"
+4. Worker polls SQS
+5. Worker processes order (inventory, shipping)
+6. Worker deletes message from queue
+```
+
+---
+
+## SNS Deep Dive
+
+### What It Does
+
+Broadcasts events to **multiple subscribers** simultaneously.
+
+### Architecture
+
+```
+Order Service (Publisher)
+    ↓
+SNS Topic: "OrderEvents"
+    ↓
+├── Email (Customer notification)
+├── SQS Queue (Inventory service)
+├── Lambda (Analytics logging)
+└── HTTP Endpoint (External system)
+```
+
+### Key Characteristics
+
+* **Fire and forget**: No storage
+* **Push model**: SNS delivers to subscribers
+* **Multiple protocols**: Email, SMS, SQS, Lambda, HTTP
+* **Message filtering**: Subscribers receive only what they want
+* **No ordering guarantees**
+
+### When to Use SNS
+
+✅ Event-driven architectures
+✅ Broadcasting notifications
+✅ Fanout to multiple services
+✅ Mobile push notifications
+✅ Email/SMS alerts
+
+❌ Single consumer task queue
+❌ Message persistence needed
+❌ Stream processing
+❌ Replay capability required
+
+### Example Use Case
+
+**User Registration**:
+```
+1. User registers
+2. API publishes to SNS: "UserRegistered" event
+3. SNS delivers to:
+   - Welcome email
+   - SQS queue (onboarding workflow)
+   - Lambda (analytics)
+   - Webhook (CRM system)
+4. All happen simultaneously and independently
+```
+
+---
+
+## Kinesis Deep Dive
+
+### What It Does
+
+Captures and processes **high-volume streaming data** in real-time.
+
+### Architecture
+
+```
+1000s of IoT Devices / Apps
+    ↓
+Kinesis Data Stream (3 shards)
+    ↓
+├── Lambda (Real-time processing)
+├── Flink (Analytics)
+├── Firehose (S3 archival)
+└── Custom Consumer (Dashboard)
+```
+
+### Key Characteristics
+
+* **Streaming data**: Continuous flow
+* **Data persistence**: 1-365 days retention
+* **Ordering per shard**: Same partition key → same shard
+* **Multiple consumers**: Each reads independently
+* **Replay capability**: Reprocess historical data
+* **High throughput**: MB/sec per shard
+
+### When to Use Kinesis
+
+✅ Real-time analytics
+✅ Log aggregation
+✅ Clickstream analysis
+✅ IoT telemetry
+✅ Multiple consumers need same data
+✅ Data replay required
+
+❌ Simple background tasks
+❌ Low-volume events
+❌ One-time message processing
+❌ Broadcasting to different endpoints
+
+### Example Use Case
+
+**Clickstream Analytics**:
+```
+1. User clicks on website
+2. Event sent to Kinesis: {userId, action, timestamp}
+3. Data flows to multiple consumers:
+   - Lambda → DynamoDB (real-time personalization)
+   - Flink → Real-time fraud detection
+   - Firehose → S3 (data lake for ML)
+   - Analytics → Live dashboard
+4. All consumers process independently
+5. Data retained for 7 days (can replay if needed)
+```
+
+---
+
+## Decision Framework
+
+### Choose by Use Case
+
+```
+Need to queue tasks for workers?
+    → SQS
+
+Need to notify multiple services?
+    → SNS
+
+Need to process streaming data?
+    → Kinesis
+```
+
+### Choose by Requirements
+
+**Volume & Velocity**:
+```
+Low volume, async tasks → SQS
+High volume, real-time → Kinesis
+Notifications, any volume → SNS
+```
+
+**Consumer Pattern**:
+```
+One consumer per message → SQS
+Multiple different endpoints → SNS
+Multiple consumers, same data → Kinesis
+```
+
+**Data Persistence**:
+```
+Temporary (until processed) → SQS
+No persistence needed → SNS
+Long-term (replay needed) → Kinesis
+```
+
+**Ordering**:
+```
+Strict ordering required → SQS FIFO or Kinesis
+No ordering needed → SQS Standard or SNS
+```
+
+**Cost Sensitivity**:
+```
+Pay per request (variable) → SQS or SNS
+Predictable throughput → Kinesis (shard-based)
+```
+
+---
+
+## Common Patterns and Combinations
+
+### Pattern 1: SNS + SQS Fanout
+
+**Best of both worlds**:
+
+```
+Order Service
+    ↓
+SNS Topic
+    ↓
+├── SQS Queue 1 → Inventory Worker
+├── SQS Queue 2 → Shipping Worker
+├── SQS Queue 3 → Analytics Worker
+└── Email (Customer)
+```
+
+**Benefits**:
+* SNS broadcasts to multiple services
+* Each SQS queue buffers for its service
+* Independent retry logic per service
+* Decoupled processing
+
+**Use when**:
+* Multiple services need the same event
+* Each service needs reliable processing
+* Services scale independently
+
+### Pattern 2: Kinesis + Lambda + DynamoDB
+
+**Real-time stream processing**:
+
+```
+Mobile Apps
+    ↓
+Kinesis Data Stream
+    ↓
+Lambda (processes batches)
+    ↓
+DynamoDB (stores results)
+```
+
+**Benefits**:
+* Real-time processing
+* Automatic scaling
+* Multiple Lambdas can read same stream
+* Built-in retry logic
+
+**Use when**:
+* Real-time data processing needed
+* Serverless architecture
+* Event-driven workflows
+
+### Pattern 3: Kinesis + Firehose + S3 + Athena
+
+**Data lake pipeline**:
+
+```
+Application Logs
+    ↓
+Kinesis Data Stream
+    ↓
+Firehose (transforms & batches)
+    ↓
+S3 (Parquet format)
+    ↓
+Athena (SQL queries)
+```
+
+**Benefits**:
+* Real-time ingestion
+* Automatic formatting
+* Cost-efficient storage
+* SQL analytics
+
+**Use when**:
+* Building data lake
+* Log analytics
+* Historical analysis
+
+### Pattern 4: API Gateway + SQS + Lambda
+
+**Async API pattern**:
+
+```
+Client API Request
+    ↓
+API Gateway
+    ↓
+SQS Queue
+    ↓
+Lambda Worker (async)
+    ↓
+Returns 202 Accepted immediately
+```
+
+**Benefits**:
+* API responds immediately
+* Backend processes asynchronously
+* Handles traffic spikes
+* Built-in retry logic
+
+**Use when**:
+* Long-running operations
+* Variable processing time
+* High availability required
+
+---
+
+## Real-World Scenarios
+
+### Scenario 1: E-Commerce Order Processing
+
+**Requirements**:
+* User places order
+* Multiple steps: inventory, payment, shipping, email
+* Each step should not block the other
+* Retry failed steps
+
+**Solution**: SNS + SQS Fanout
+
+```
+Order API
+    ↓
+SNS Topic: "OrderPlaced"
+    ↓
+├── SQS: InventoryQueue → Worker checks inventory
+├── SQS: PaymentQueue → Worker processes payment
+├── SQS: ShippingQueue → Worker creates shipment
+└── Email: Customer confirmation
+```
+
+**Why**:
+* SNS broadcasts order event
+* Each queue handles its domain independently
+* Failed steps retry without affecting others
+* Customer gets immediate confirmation
+
+### Scenario 2: Real-Time Gaming Leaderboard
+
+**Requirements**:
+* Millions of game events per second
+* Real-time leaderboard updates
+* Historical analysis for ML
+* Multiple consumers need same data
+
+**Solution**: Kinesis Data Streams
+
+```
+Game Clients (millions)
+    ↓
+Kinesis Stream (100 shards)
+    ↓
+├── Lambda → DynamoDB (real-time leaderboard)
+├── Flink → Detect cheating patterns
+└── Firehose → S3 (ML training data)
+```
+
+**Why**:
+* High throughput (100 MB/sec)
+* Multiple consumers read independently
+* Data retained for replay
+* Real-time processing
+
+### Scenario 3: Microservices Communication
+
+**Requirements**:
+* 20 microservices
+* Each service needs to notify others of events
+* Services should be loosely coupled
+* Easy to add new services
+
+**Solution**: SNS per Service + SQS per Subscriber
+
+```
+Service A
+    ↓
+SNS: "ServiceA.Events"
+    ↓
+├── SQS: ServiceB.Queue
+├── SQS: ServiceC.Queue
+└── SQS: ServiceD.Queue
+```
+
+**Why**:
+* Each service publishes to its topic
+* Services subscribe only to events they care
+* Add new services without changing existing ones
+* Decoupled architecture
+
+### Scenario 4: Log Aggregation Pipeline
+
+**Requirements**:
+* Collect logs from 100 servers
+* Process and enrich logs
+* Store for compliance (1 year)
+* Query with SQL
+
+**Solution**: Kinesis + Firehose + S3 + Athena
+
+```
+100 Servers
+    ↓
+Kinesis Agent
+    ↓
+Kinesis Data Stream
+    ↓
+Firehose (Lambda transform)
+    ↓
+S3 (Parquet)
+    ↓
+Athena (queries)
+```
+
+**Why**:
+* High-volume log ingestion
+* Transform with Lambda
+* Cost-efficient Parquet storage
+* SQL queries with Athena
+* 1-year retention in Kinesis
+
+### Scenario 5: Image Processing Pipeline
+
+**Requirements**:
+* Users upload images
+* Generate thumbnails (slow)
+* User should get immediate response
+* Retry failed processing
+
+**Solution**: SQS Standard Queue
+
+```
+User Upload → API
+    ↓
+S3 (original image)
+    ↓
+API → SQS: "Process image-123.jpg"
+    ↓
+API → User: "Upload successful" (202 Accepted)
+
+Worker Pool (10 instances)
+    ↓
+Poll SQS → Get message
+    ↓
+Download from S3 → Process → Upload thumbnail
+    ↓
+Delete message from SQS
+```
+
+**Why**:
+* User gets immediate response
+* Workers process in background
+* Automatic retry (visibility timeout)
+* Scales workers independently
+* DLQ for poison messages
+
+---
+
+## Cost Comparison
+
+### SQS Pricing
+
+**Standard Queue**:
+* $0.40 per million requests
+* First 1M requests/month free
+
+**Example**:
+* 10M messages/month = $4.00
+
+### SNS Pricing
+
+**Publish**:
+* $0.50 per million requests
+* First 1M requests/month free
+
+**Delivery**:
+* Email: $2.00 per 100,000 notifications
+* SQS: Free
+* Lambda: Free
+* HTTP: $0.60 per million notifications
+
+**Example**:
+* 10M publishes + 30M SQS deliveries = $5.00
+
+### Kinesis Data Streams Pricing
+
+**Provisioned Mode**:
+* $0.015 per shard-hour
+* $0.014 per million PUT requests
+
+**Example**:
+* 3 shards × 24 hours × 30 days = $32.40/month
+* 10M PUT requests = $0.14
+* **Total**: $32.54/month
+
+**On-Demand Mode**:
+* $0.04 per GB ingested
+* $0.015 per GB retrieved
+
+**Example**:
+* 100 GB ingested = $4.00
+* 200 GB retrieved = $3.00
+* **Total**: $7.00/month
+
+### Cost Comparison Summary
+
+```
+Low Volume (1M events/month):
+    SQS: ~$0.40
+    SNS: ~$0.50
+    Kinesis: ~$32 (1 shard minimum)
+
+Medium Volume (100M events/month):
+    SQS: ~$40
+    SNS: ~$50
+    Kinesis: ~$100 (10 shards)
+
+High Volume (1B events/month):
+    SQS: ~$400
+    SNS: ~$500
+    Kinesis: ~$500 (100 shards)
+```
+
+**Cost Insight**:
+* **SQS/SNS**: Better for low-medium volume
+* **Kinesis**: Better for high volume with multiple consumers
+* **Kinesis**: Fixed cost (shard-based) vs variable (request-based)
+
+---
+
+## When to Use What
+
+### Use SQS When
+
+✅ You need a **task queue** for background jobs
+✅ **One consumer** should process each message
+✅ You need **retry logic** with visibility timeout
+✅ Messages should be **deleted after processing**
+✅ **Decoupling** services is the goal
+✅ **Ordering** is critical (use FIFO)
+✅ **Low to medium volume** of messages
+
+**Examples**:
+* Email sending queue
+* Image processing
+* Order fulfillment
+* Payment processing
+* Report generation
+
+### Use SNS When
+
+✅ You need to **broadcast events** to multiple subscribers
+✅ **Different destinations** need the same event (email, SQS, Lambda, HTTP)
+✅ You need **push notifications** (mobile, email, SMS)
+✅ **Real-time delivery** is important
+✅ You want **event-driven architecture**
+✅ **No storage** needed (fire and forget)
+
+**Examples**:
+* User notifications
+* System alerts
+* Microservices communication
+* Mobile push notifications
+* Webhooks to external systems
+
+### Use Kinesis When
+
+✅ You're processing **streaming data** (continuous flow)
+✅ **High throughput** required (MB/sec)
+✅ **Multiple consumers** need the **same data** independently
+✅ You need to **replay data** (historical reprocessing)
+✅ **Real-time analytics** is required
+✅ **Ordered processing** per partition key
+✅ Data needs to be **persisted** (1-365 days)
+
+**Examples**:
+* Clickstream analytics
+* IoT telemetry
+* Log aggregation
+* Real-time dashboards
+* Fraud detection
+* Gaming leaderboards
+
+### Combine When
+
+**SNS + SQS**:
+* Fanout pattern with reliable delivery
+* Multiple services processing same event
+
+**Kinesis + Lambda**:
+* Real-time stream processing
+* Serverless architecture
+
+**Kinesis + Firehose**:
+* Stream to data lake
+* Analytics pipeline
+
+**API Gateway + SQS**:
+* Async API responses
+* Long-running operations
+
+---
+
+## Summary
+
+### Quick Decision Tree
+
+```
+Is it streaming data (continuous flow)?
+├─ Yes → Kinesis
+└─ No ↓
+
+Do multiple different endpoints need it?
+├─ Yes → SNS
+└─ No ↓
+
+Is it a task that one worker should process?
+└─ Yes → SQS
+```
+
+### Key Takeaways
+
+**SQS**: Queue for **one-to-one** async task processing
+**SNS**: Pub/Sub for **one-to-many** event broadcasting  
+**Kinesis**: Stream for **many-to-many** real-time data processing
+
+**Remember**:
+* SQS = Task Queue (Pull)
+* SNS = Event Bus (Push)
+* Kinesis = Data Stream (Pull, with persistence)
+
+**Most Common Pattern**: SNS + SQS Fanout
+**Most Scalable**: Kinesis for streaming workloads
+**Most Cost-Effective** (low volume): SQS/SNS

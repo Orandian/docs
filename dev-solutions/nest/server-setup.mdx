@@ -1,0 +1,254 @@
+---
+title: "Server Setup"
+description: "Server Setup"
+---
+
+# NestJS Server Setup Guide
+
+This guide covers deploying a NestJS application to an EC2 server with PM2 for process management and Caddy as a reverse proxy.
+
+## Prerequisites
+
+- Ubuntu EC2 instance
+- SSH access with PEM key
+- Node.js and npm installed on server
+- PM2 installed globally (`npm install -g pm2`)
+- Caddy web server installed
+
+## 1. Copy Project to Server
+
+Copy your NestJS project to the server, excluding `node_modules`:
+
+```bash
+rsync -avz --exclude 'node_modules' -e "ssh -i server.pem" server-folder ubuntu@**.**.**.***:~/
+```
+
+## 2. Server Setup
+
+SSH into your server:
+
+```bash
+ssh -i server.pem ubuntu@**.**.**.***
+```
+
+Navigate to project directory:
+
+```bash
+cd ~/server-folder
+```
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Build the application:
+
+```bash
+npm run build
+```
+
+## 3. Configure PM2
+
+Create a PM2 ecosystem configuration file:
+
+```bash
+cat > ecosystem.config.js << 'EOF'
+module.exports = {
+  apps: [{
+    name: 'server-name',
+    script: 'dist/main.js',
+    instances: 1,
+    exec_mode: 'cluster',
+    env: {
+      NODE_ENV: 'production'
+    },
+    error_file: './logs/pm2-error.log',
+    out_file: './logs/pm2-out.log',
+    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    merge_logs: true,
+    autorestart: true,
+    watch: false,
+    max_memory_restart: '1G'
+  }]
+};
+EOF
+```
+
+Start the application with PM2:
+
+```bash
+pm2 start ecosystem.config.js
+```
+
+Save PM2 process list:
+
+```bash
+pm2 save
+```
+
+Configure PM2 to start on system boot:
+
+```bash
+sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu
+```
+
+## 4. Configure Caddy
+
+Edit the Caddyfile:
+
+```bash
+sudo nano /etc/caddy/Caddyfile
+```
+
+Add the following configuration (replace with your domain):
+
+```
+**.**.**.***.nip.io {
+    reverse_proxy localhost:3000
+}
+```
+
+Reload Caddy:
+
+```bash
+sudo systemctl reload caddy
+```
+
+## 5. Configure EC2 Security Group
+
+Ensure your EC2 Security Group allows inbound traffic:
+
+- **Port 22 (SSH)**: From your IP
+- **Port 80 (HTTP)**: From 0.0.0.0/0
+- **Port 443 (HTTPS)**: From 0.0.0.0/0
+
+### Via AWS Console:
+
+1. Go to EC2 → Instances
+2. Select your instance
+3. Click on the Security tab
+4. Click on the Security Group link
+5. Edit inbound rules
+6. Add rules for ports 80 and 443
+
+### Via AWS CLI:
+
+```bash
+aws ec2 authorize-security-group-ingress --group-id <YOUR_SECURITY_GROUP_ID> --protocol tcp --port 80 --cidr 0.0.0.0/0
+aws ec2 authorize-security-group-ingress --group-id <YOUR_SECURITY_GROUP_ID> --protocol tcp --port 443 --cidr 0.0.0.0/0
+```
+
+## 6. Verify Setup
+
+Check PM2 status:
+
+```bash
+pm2 status
+```
+
+Check application logs:
+
+```bash
+pm2 logs server-name
+```
+
+Test local connection:
+
+```bash
+curl http://localhost:3000
+```
+
+Check Caddy status:
+
+```bash
+sudo systemctl status caddy
+```
+
+## Useful PM2 Commands
+
+- `pm2 status` - Check application status
+- `pm2 logs [app-name]` - View logs
+- `pm2 restart [app-name]` - Restart application
+- `pm2 stop [app-name]` - Stop application
+- `pm2 delete [app-name]` - Remove application from PM2
+- `pm2 monit` - Monitor in real-time
+- `pm2 save` - Save current process list
+- `pm2 resurrect` - Restore saved processes
+
+## Useful Caddy Commands
+
+- `sudo systemctl status caddy` - Check Caddy status
+- `sudo systemctl reload caddy` - Reload configuration
+- `sudo systemctl restart caddy` - Restart Caddy
+- `sudo journalctl -u caddy -f` - View Caddy logs in real-time
+- `caddy validate --config /etc/caddy/Caddyfile` - Validate configuration
+
+## Updating the Application
+
+When you need to update the application:
+
+```bash
+# On your local machine, sync changes
+rsync -avz --exclude 'node_modules' -e "ssh -i BusPinDev.pem" ybs-app-server ubuntu@54.249.36.137:~/
+
+# On the server
+cd ~/server-folder
+npm install  # If dependencies changed
+npm run build
+pm2 restart server-name
+```
+
+## Environment Variables
+
+Ensure your `.env` file is properly configured on the server with production values:
+
+```bash
+PORT=3000
+NODE_ENV=production
+DATABASE_URL=your_database_url
+JWT_SECRET=your_jwt_secret
+# Add other environment variables as needed
+```
+
+## Troubleshooting
+
+### Application not starting
+
+Check PM2 logs:
+```bash
+pm2 logs server-name --err
+```
+
+### Can't access from browser
+
+1. Check if the app is running: `pm2 status`
+2. Check if Caddy is running: `sudo systemctl status caddy`
+3. Verify security group allows ports 80 and 443
+4. Check local connectivity: `curl http://localhost:3000`
+
+### SSL Certificate issues
+
+Caddy automatically obtains SSL certificates. If there are issues:
+```bash
+sudo journalctl -u caddy -n 50
+```
+
+Ensure your domain points to the correct IP address.
+
+## Security Recommendations
+
+1. Keep your PEM key secure and never commit it to version control
+2. Use environment variables for sensitive data
+3. Regularly update packages: `npm audit fix`
+4. Configure proper firewall rules (UFW or Security Groups)
+5. Set up regular backups of your data
+6. Monitor application logs for suspicious activity
+7. Use strong passwords for database and other services
+
+## Additional Resources
+
+- [PM2 Documentation](https://pm2.keymetrics.io/docs/usage/quick-start/)
+- [Caddy Documentation](https://caddyserver.com/docs/)
+- [NestJS Documentation](https://docs.nestjs.com/)

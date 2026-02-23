@@ -1,0 +1,698 @@
+---
+title: "Amazon Data Firehose"
+description: "Amazon Data Firehose"
+---
+
+# AWS Data Firehose Developer Guide
+
+This guide explains **Amazon Data Firehose concepts** in a **practical, developer-focused way**, including **data ingestion, transformation, buffering, destinations, and delivery patterns**, using real application examples.
+
+---
+
+## Table of Contents
+
+1. [What is AWS Data Firehose](#what-is-aws-data-firehose)
+2. [Where Firehose Fits in an Application](#where-firehose-fits-in-an-application)
+3. [Firehose vs Kinesis Data Streams vs Lambda](#firehose-vs-kinesis-data-streams-vs-lambda)
+4. [Core Concepts: Delivery Streams](#core-concepts-delivery-streams)
+5. [Data Sources](#data-sources)
+6. [Data Transformation](#data-transformation)
+7. [Buffering and Batching](#buffering-and-batching)
+8. [Supported Destinations](#supported-destinations)
+9. [Data Format Conversion](#data-format-conversion)
+10. [Error Handling and Monitoring](#error-handling-and-monitoring)
+11. [Real Application Example: Log Analytics Pipeline](#real-application-example-log-analytics-pipeline)
+12. [Best Practices](#best-practices)
+13. [Common Exam & Interview Notes](#common-exam--interview-notes)
+
+---
+
+## What is AWS Data Firehose
+
+**Amazon Data Firehose** (formerly Kinesis Data Firehose) is a **fully managed service** for **reliably loading streaming data** into data lakes, data stores, and analytics services.
+
+**Core idea**:
+
+> Firehose is the easiest way to capture, transform, and load streaming data into AWS destinations.
+
+### Key Features
+
+- **Zero administration**: No servers to manage
+- **Automatic scaling**: Handles any throughput
+- **Built-in transformations**: Lambda integration
+- **Format conversion**: JSON to Parquet/ORC
+- **Near real-time delivery**: 60 seconds minimum
+- **Pay per use**: No upfront costs
+
+---
+
+## Where Firehose Fits in an Application
+
+### Typical Architecture
+
+```
+Data Sources (Apps, Logs, IoT)
+        ↓
+    Firehose
+        ↓
+    [Optional: Lambda Transform]
+        ↓
+    [Optional: Format Conversion]
+        ↓
+Destinations (S3, Redshift, OpenSearch, etc.)
+        ↓
+Analytics / Dashboards
+```
+
+**Use Firehose when**:
+
+- Loading data into S3, Redshift, or OpenSearch
+- No need for real-time processing (near real-time is OK)
+- Simple transformations sufficient
+- You want zero infrastructure management
+
+---
+
+## Firehose vs Kinesis Data Streams vs Lambda
+
+| Feature            | Firehose                  | Kinesis Streams      | Lambda             |
+| ------------------ | ------------------------- | -------------------- | ------------------ |
+| **Purpose**        | Load data to destinations | Stream processing    | Event processing   |
+| **Management**     | Fully managed             | Manage shards        | Serverless         |
+| **Latency**        | Near real-time (60s+)     | Real-time (200ms)    | Real-time          |
+| **Scaling**        | Automatic                 | Manual/auto sharding | Automatic          |
+| **Storage**        | No storage                | 1-365 days           | No storage         |
+| **Replay**         | No                        | Yes                  | No                 |
+| **Destinations**   | Built-in (S3, Redshift)   | Any                  | Any                |
+| **Transformation** | Lambda integration        | Requires consumer    | Native             |
+| **Cost Model**     | Pay per GB                | Pay per shard-hour   | Pay per invocation |
+| **Use Case**       | ETL to data lake          | Stream processing    | Event-driven logic |
+
+### When to Use What
+
+**Firehose**:
+
+- Loading data to S3/Redshift/OpenSearch
+- Simple ETL pipelines
+- Log aggregation and archival
+- Near real-time analytics
+
+**Kinesis Streams**:
+
+- Custom stream processing
+- Multiple consumers
+- Data replay needed
+- Real-time requirements
+
+**Lambda**:
+
+- Event-driven processing
+- Complex transformations
+- Integration with AWS services
+- Custom destinations
+
+---
+
+## Core Concepts: Delivery Streams
+
+### Delivery Stream
+
+A **delivery stream** is the underlying entity of Firehose that you use to deliver data.
+
+**Components**:
+
+- **Source**: Where data comes from
+- **Transformation**: Optional Lambda processing
+- **Conversion**: Optional format change (JSON → Parquet)
+- **Destination**: Where data is delivered
+- **Backup**: Optional S3 backup for all data
+
+### Delivery Stream Types
+
+**Direct PUT**:
+
+```
+Application → Firehose → Destination
+```
+
+**Kinesis Data Stream as Source**:
+
+```
+Application → Kinesis Stream → Firehose → Destination
+```
+
+**MSK as Source**:
+
+```
+Kafka Producers → MSK → Firehose → Destination
+```
+
+---
+
+## Data Sources
+
+### 1. Direct PUT (PutRecord/PutRecordBatch)
+
+**Most common method**:
+
+```java
+PutRecordRequest request = PutRecordRequest.builder()
+    .deliveryStreamName("my-delivery-stream")
+    .record(Record.builder()
+        .data(SdkBytes.fromUtf8String(jsonData))
+        .build())
+    .build();
+
+firehose.putRecord(request);
+```
+
+**Characteristics**:
+
+- Direct API calls from your application
+- Synchronous writes
+- Automatic batching available
+
+### 2. Kinesis Data Streams
+
+**For existing Kinesis streams**:
+
+```
+Kinesis Stream → Firehose → S3
+```
+
+**Benefits**:
+
+- Leverage existing Kinesis infrastructure
+- Multiple consumers (Kinesis + Firehose)
+- Data replay capability
+
+### 3. Amazon MSK
+
+**For Kafka workloads**:
+
+```
+MSK Cluster → Firehose → S3/Redshift
+```
+
+**Benefits**:
+
+- Kafka compatibility
+- No code changes needed
+- Automatic offset management
+
+### 4. AWS Services
+
+**Integrated sources**:
+
+- CloudWatch Logs
+- IoT Core
+- EventBridge
+- API Gateway
+
+---
+
+## Data Transformation
+
+### Lambda Transformation
+
+Firehose can invoke Lambda to transform data before delivery.
+
+### Transformation Flow
+
+```
+Source Data → Firehose → Lambda → Transformed Data → Destination
+```
+
+### Example: Enrich and Filter Logs
+
+```python
+import json
+import base64
+
+def lambda_handler(event, context):
+    output = []
+
+    for record in event['records']:
+        # Decode input
+        payload = base64.b64decode(record['data']).decode('utf-8')
+        data = json.loads(payload)
+
+        # Transform: Add timestamp, filter errors
+        if data.get('level') == 'ERROR':
+            data['processed_at'] = context.invoked_function_arn
+            data['enriched'] = True
+
+            # Encode output
+            output_data = json.dumps(data) + '\n'
+            output_record = {
+                'recordId': record['recordId'],
+                'result': 'Ok',
+                'data': base64.b64encode(output_data.encode('utf-8')).decode('utf-8')
+            }
+        else:
+            # Drop non-error logs
+            output_record = {
+                'recordId': record['recordId'],
+                'result': 'Dropped'
+            }
+
+        output.append(output_record)
+
+    return {'records': output}
+```
+
+### Transformation Results
+
+- **Ok**: Record transformed successfully
+- **Dropped**: Record filtered out
+- **ProcessingFailed**: Retry or backup to S3
+
+### Use Cases
+
+- Data enrichment (add metadata)
+- Filtering (remove unwanted records)
+- Format conversion (CSV to JSON)
+- Data masking (PII redaction)
+- Schema validation
+
+---
+
+## Buffering and Batching
+
+### Buffer Conditions
+
+Firehose buffers data before delivering based on **size** OR **time** (whichever comes first).
+
+### Default Settings
+
+**S3**:
+
+- Buffer size: **5 MB**
+- Buffer interval: **300 seconds** (5 minutes)
+
+**Redshift**:
+
+- Buffer size: **5 MB**
+- Buffer interval: **300 seconds**
+
+**OpenSearch**:
+
+- Buffer size: **5 MB**
+- Buffer interval: **300 seconds**
+
+### Configuration Example
+
+```
+Buffer Size: 1 MB
+Buffer Interval: 60 seconds
+
+Scenario 1: 1 MB reached in 30 seconds → Deliver
+Scenario 2: 50 seconds passed, only 0.5 MB → Deliver at 60s
+```
+
+### Important Notes
+
+- **Minimum interval**: 60 seconds (for S3, Redshift)
+- **Lower values**: More frequent, smaller files
+- **Higher values**: Fewer, larger files
+- **Cost tradeoff**: More frequent = more API calls = higher cost
+
+---
+
+## Supported Destinations
+
+### 1. Amazon S3
+
+**Most popular destination**:
+
+**Features**:
+
+- Automatic partitioning
+- Compression (GZIP, Snappy, ZIP)
+- Encryption (SSE-S3, SSE-KMS)
+- Prefix customization
+
+**Output Structure**:
+
+```
+s3://my-bucket/year/month/day/hour/
+    data-timestamp-uuid.json
+```
+
+**Use Cases**:
+
+- Data lake
+- Long-term storage
+- Analytics with Athena
+- Archive and compliance
+
+### 2. Amazon Redshift
+
+**Data warehouse loading**:
+
+**How it works**:
+
+```
+Firehose → S3 (staging) → Redshift COPY command
+```
+
+**Features**:
+
+- Automatic COPY commands
+- Column-based compression
+- Retry logic
+- Error logging
+
+**Use Cases**:
+
+- Business intelligence
+- SQL analytics
+- Data warehousing
+
+### 3. Amazon OpenSearch
+
+**Search and analytics**:
+
+**Features**:
+
+- Index rotation (daily, weekly, monthly)
+- Automatic retry
+- Backup to S3
+- VPC support
+
+**Use Cases**:
+
+- Log analytics
+- Full-text search
+- Real-time dashboards
+- Security monitoring
+
+### 4. HTTP Endpoints
+
+**Custom destinations**:
+
+**Supported**:
+
+- Datadog
+- Splunk
+- New Relic
+- Custom endpoints
+
+**Features**:
+
+- Authentication headers
+- Retry configuration
+- Backup to S3
+
+### 5. Third-Party Services
+
+**Direct integrations**:
+
+- Datadog
+- MongoDB
+- Splunk
+- Coralogix
+
+---
+
+## Data Format Conversion
+
+### JSON to Parquet/ORC
+
+Firehose can automatically convert JSON to columnar formats.
+
+### Why Convert?
+
+**Benefits of Parquet/ORC**:
+
+- **90% smaller** than JSON
+- **10x faster** queries
+- **Lower costs** for storage and queries
+- Optimized for analytics
+
+### Configuration
+
+**Requirements**:
+
+- Input: JSON (one record per line)
+- Schema: AWS Glue Data Catalog table
+- Output: Parquet or ORC
+
+### Example Flow
+
+```
+JSON Logs → Firehose → Parquet → S3 → Athena Queries
+```
+
+**Input** (JSON):
+
+```json
+{"user_id":"123","event":"click","timestamp":"2025-01-15T10:30:00Z"}
+{"user_id":"456","event":"view","timestamp":"2025-01-15T10:31:00Z"}
+```
+
+**Output** (Parquet):
+
+```
+Columnar binary format (90% smaller)
+```
+
+### Glue Integration
+
+```
+1. Create Glue Crawler
+2. Crawler scans sample data
+3. Glue creates table schema
+4. Firehose uses schema for conversion
+```
+
+---
+
+## Error Handling and Monitoring
+
+### Failed Records
+
+**Delivery Failures**:
+
+- Lambda transformation errors
+- Destination unavailable
+- Format conversion errors
+
+**Handling**:
+
+```
+Failed Record → S3 Backup Bucket
+    ↓
+CloudWatch Alarm
+    ↓
+Manual Review/Retry
+```
+
+### Backup Configuration
+
+**Options**:
+
+- **All data**: Backup everything to S3
+- **Failed only**: Backup only failed records
+
+**Backup Structure**:
+
+```
+s3://backup-bucket/
+    processing-failed/
+    elasticsearch-failed/
+```
+
+### Monitoring Metrics
+
+**Key CloudWatch Metrics**:
+
+- `DeliveryToS3.Success`
+- `DeliveryToS3.DataFreshness` (latency)
+- `IncomingBytes`
+- `IncomingRecords`
+- `DataReadFromKinesisStream.Bytes`
+- `ExecuteProcessing.Duration` (Lambda)
+
+### CloudWatch Alarms
+
+```
+Alarm: DeliveryToS3.DataFreshness > 15 minutes
+Action: SNS notification to ops team
+```
+
+---
+
+## Real Application Example: Log Analytics Pipeline
+
+### Scenario
+
+SaaS application with microservices sending logs to centralized analytics.
+
+### Architecture
+
+```
+10 Microservices (EC2/ECS)
+    ↓
+CloudWatch Logs
+    ↓
+Firehose Delivery Stream
+    ↓
+[Lambda Transform: Filter & Enrich]
+    ↓
+[Convert JSON → Parquet]
+    ↓
+S3 Data Lake
+    ↓
+├── Athena (SQL Queries)
+├── QuickSight (Dashboards)
+└── Redshift (Data Warehouse)
+```
+
+### Implementation Steps
+
+**1. Configure Firehose**:
+
+```
+Source: CloudWatch Logs
+Buffer: 1 MB or 60 seconds
+Transformation: Lambda (enabled)
+Conversion: JSON to Parquet
+Destination: S3
+Backup: Failed records to S3
+```
+
+**2. Lambda Transformation**:
+
+```python
+def lambda_handler(event, context):
+    output = []
+
+    for record in event['records']:
+        payload = json.loads(base64.b64decode(record['data']))
+
+        # Filter: Only ERROR and WARN levels
+        if payload.get('level') in ['ERROR', 'WARN']:
+
+            # Enrich: Add service name, environment
+            payload['service'] = extract_service(payload)
+            payload['environment'] = 'production'
+            payload['processed_timestamp'] = int(time.time())
+
+            output.append({
+                'recordId': record['recordId'],
+                'result': 'Ok',
+                'data': base64.b64encode(
+                    json.dumps(payload).encode('utf-8')
+                )
+            })
+        else:
+            # Drop INFO and DEBUG logs
+            output.append({
+                'recordId': record['recordId'],
+                'result': 'Dropped'
+            })
+
+    return {'records': output}
+```
+
+**3. Glue Schema**:
+
+```sql
+CREATE EXTERNAL TABLE logs (
+    timestamp string,
+    level string,
+    message string,
+    service string,
+    environment string,
+    processed_timestamp bigint
+)
+STORED AS PARQUET
+LOCATION 's3://my-logs-bucket/processed/'
+```
+
+**4. S3 Structure**:
+
+```
+s3://my-logs-bucket/
+    processed/
+        year=2025/
+            month=01/
+                day=15/
+                    hour=10/
+                        data.parquet
+    backup/
+        processing-failed/
+```
+
+**5. Query with Athena**:
+
+```sql
+SELECT
+    service,
+    level,
+    COUNT(*) as error_count
+FROM logs
+WHERE year = '2025'
+  AND month = '01'
+  AND level = 'ERROR'
+GROUP BY service, level
+ORDER BY error_count DESC
+```
+
+### Benefits
+
+- **90% cost reduction**: Parquet compression
+- **Near real-time**: 1-minute delivery
+- **Filtered data**: Only errors and warnings
+- **Enriched logs**: Service and environment tags
+- **Queryable**: SQL analytics with Athena
+- **Zero management**: Fully managed pipeline
+
+---
+
+## Best Practices
+
+1. **Choose buffer settings wisely**: Balance latency vs cost
+2. **Enable compression**: GZIP for S3 (saves 70-90%)
+3. **Use Parquet conversion**: For analytics workloads
+4. **Configure S3 backup**: Capture failed records
+5. **Monitor DataFreshness**: Alert on delivery delays
+6. **Keep Lambda transforms simple**: < 3 minutes execution
+7. **Use Kinesis as source**: When replay is needed
+8. **Partition S3 data**: Use custom prefixes
+9. **Set up CloudWatch alarms**: Monitor failures
+10. **Test Lambda transforms**: Handle edge cases
+11. **Use VPC for OpenSearch**: Security best practice
+12. **Enable encryption**: SSE-S3 or SSE-KMS
+
+---
+
+## Common Exam & Interview Notes
+
+- Firehose is **near real-time** (60+ seconds minimum)
+- **Automatic scaling**: No capacity planning needed
+- **No data storage**: Data is delivered, not stored
+- **Buffer conditions**: Size OR time (whichever first)
+- **Lambda transformation**: 3 minutes max execution time
+- **Format conversion**: JSON to Parquet/ORC via Glue schema
+- **Destinations**: S3, Redshift, OpenSearch, HTTP endpoints
+- **Backup to S3**: All data or failed only
+- **No replay capability**: Use Kinesis Streams if needed
+- **Pay per GB**: No upfront costs or provisioning
+- **Maximum record size**: 1 MB before base64 encoding
+- **Batch operations**: PutRecordBatch up to 500 records
+- Firehose **automatically retries** failed deliveries
+- Works with **CloudWatch Logs** for centralized logging
+
+---
+
+## Summary
+
+- Firehose delivers streaming data to AWS destinations
+- Fully managed with automatic scaling
+- Built-in Lambda transformation support
+- JSON to Parquet conversion for analytics
+- Near real-time delivery (60+ seconds)
+- Perfect for ETL, log aggregation, and data lake ingestion
+- Zero infrastructure management required
